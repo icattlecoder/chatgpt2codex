@@ -1,0 +1,42 @@
+{
+  "name": "chatgpt2codex",
+  "version": "0.0.0-development",
+  "description": "npm launcher for the chatgpt2codex Go CLI",
+  "license": "MIT",
+  "homepage": "https://github.com/icattlecoder/chatgpt2codex#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/icattlecoder/chatgpt2codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/icattlecoder/chatgpt2codex/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "chatgpt2codex": "./bin/chatgpt2codex.js"
+  },
+  "files": [
+    "bin/chatgpt2codex.js",
+    "scripts/install.js",
+    "scripts/platform.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "prepublishOnly": "node scripts/prepublish.js",
+    "test:package": "npm pack --dry-run"
+  },
+  "keywords": [
+    "chatgpt",
+    "codex",
+    "cli",
+    "go",
+    "agent"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags-ignore:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build CLI
+        run: go build -trimpath -o /tmp/chatgpt2codex ./cmd/chatgpt2codex
+
+      - name: Check npm wrapper scripts
+        run: |
+          node --check bin/chatgpt2codex.js
+          node --check scripts/platform.js
+          node --check scripts/install.js
+          node --check scripts/prepublish.js
+
+      - name: Smoke test installer in development mode
+        run: node scripts/install.js
+
+      - name: Validate npm package contents
+        run: npm pack --dry-run
