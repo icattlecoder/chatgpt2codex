@@ -1,0 +1,244 @@
+openapi: 3.1.0
+info:
+  title: chatgpt2codex Tools API
+  version: 1.0.0
+  description: Local tool service for chatgpt2codex.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /tools/read:
+    post:
+      summary: Read file contents
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReadRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/bash:
+    post:
+      summary: Execute a shell command
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BashRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/edit:
+    post:
+      summary: Edit a file with exact replacements
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/write:
+    post:
+      summary: Create or overwrite a file
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/grep:
+    post:
+      summary: Search file contents
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrepRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/find:
+    post:
+      summary: Search files by glob
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /tools/ls:
+    post:
+      summary: List directory contents
+      parameters:
+        - $ref: '#/components/parameters/XWorkspace'
+        - $ref: '#/components/parameters/XConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LsRequest'
+      responses:
+        '200':
+          description: Tool response
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+components:
+  parameters:
+    XWorkspace:
+      name: X-Workspace
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Override the default workspace for this request.
+    XConversationId:
+      name: X-Conversation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Conversation identifier used for audit log routing.
+  schemas:
+    ReadRequest:
+      type: object
+      properties:
+        path:
+          type: string
+          description: Path to the file to read.
+        offset:
+          type: integer
+          description: 1-indexed start line.
+        limit:
+          type: integer
+          description: Maximum number of lines to read.
+      required: [path]
+    BashRequest:
+      type: object
+      properties:
+        command:
+          type: string
+          description: Shell command to execute.
+        timeout:
+          type: integer
+          description: Timeout in seconds.
+      required: [command]
+    EditRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: Path to the file to edit.
+        edits:
+          type: array
+          description: Exact text replacements applied against the original file.
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              oldText:
+                type: string
+              newText:
+                type: string
+            required: [oldText, newText]
+      required: [path, edits]
+    WriteRequest:
+      type: object
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+      required: [path, content]
+    GrepRequest:
+      type: object
+      properties:
+        pattern:
+          type: string
+        path:
+          type: string
+        glob:
+          type: string
+        ignoreCase:
+          type: boolean
+        literal:
+          type: boolean
+        context:
+          type: integer
+        limit:
+          type: integer
+      required: [pattern]
+    FindRequest:
+      type: object
+      properties:
+        pattern:
+          type: string
+        path:
+          type: string
+        limit:
+          type: integer
+      required: [pattern]
+    LsRequest:
+      type: object
+      properties:
+        path:
+          type: string
+        limit:
+          type: integer
