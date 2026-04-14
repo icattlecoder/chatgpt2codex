@@ -72,7 +72,7 @@ func makeToolHandler(config Config, toolName string, executor Executor) http.Han
 			}
 		}
 
-		conversationID := strings.TrimSpace(r.Header.Get("X-Conversation-Id"))
+		conversationID := strings.TrimSpace(r.Header.Get("Openai-Conversation-Id"))
 		if conversationID == "" {
 			conversationID = generateConversationID()
 		}

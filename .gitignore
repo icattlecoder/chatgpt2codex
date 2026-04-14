@@ -34,3 +34,4 @@ dist/
 native/
 node_modules/
 chatgpt2codex-*.tgz
+bin/chatgpt2codex

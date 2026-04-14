@@ -33,6 +33,15 @@ go install github.com/icattlecoder/chatgpt2codex/cmd/chatgpt2codex@latest
 ## 本地开发
 
 ```bash
+make build
+make run ARGS='tools'
+make test
+make install
+```
+
+如果你更喜欢直接调用底层命令：
+
+```bash
 go test ./...
 go build ./cmd/chatgpt2codex
 ```
@@ -40,8 +49,15 @@ go build ./cmd/chatgpt2codex
 如果要验证 npm 包装层：
 
 ```bash
+make package
 node scripts/install.js
 npm pack --dry-run
+```
+
+查看全部 Makefile 命令：
+
+```bash
+make help
 ```
 
 开发版本的 `package.json` 使用占位版本号，`postinstall` 会自动跳过二进制下载；真正发布时由 GitHub Actions 按 tag 覆盖为正式版本。
@@ -76,13 +92,21 @@ chatgpt2codex prompt
   - 在推送 `v*` 标签时执行
   - 交叉编译六个平台的 CLI 二进制
   - 生成 GitHub Release 并上传二进制与 `SHA256SUMS`
-  - 使用 `npm publish --provenance --access public` 发布 npm 包
+  - 使用 GitHub Actions OIDC trusted publishing 发布 npm 包
 
 ## 发布流程
 
-1. 在 npm 上创建一个 Automation Token。
-2. 在 GitHub 仓库里添加 Actions Secret：`NPM_TOKEN`。
-3. 推送语义化版本标签，例如：
+1. 如果 npm 上还没有 `chatgpt2codex` 这个包，先做一次首发引导：
+   - 创建一个 npm Granular Access Token，并为该包开启 publish 权限
+   - 勾选 bypass 2FA（否则 GitHub Actions 仍会被 403 拒绝）
+   - 把它保存到 GitHub Actions Secret：`NPM_TOKEN`
+   - 推一个正式版本 tag，先把包发布到 npm
+2. 包创建出来后，在 npm 包 `chatgpt2codex` 的 Trusted publishing 设置里添加 GitHub Actions publisher：
+   - Owner: `icattlecoder`
+   - Repository: `chatgpt2codex`
+   - Workflow file: `release.yml`
+3. 完成 trusted publishing 一次性配置后，可以删除 GitHub Secret `NPM_TOKEN`。
+4. 之后继续推送语义化版本标签，例如：
 
 ```bash
 git tag v0.1.0
@@ -90,5 +114,18 @@ git push origin v0.1.0
 ```
 
 发布 workflow 会自动把 tag `v0.1.0` 转成 npm 版本 `0.1.0`，上传对应平台的二进制到 GitHub Release，然后再发布 npm 包。
+
+如果你更喜欢命令行，也可以由 npm 包 owner/admin 在本地登录 npm 后执行：
+
+```bash
+npm trust github chatgpt2codex --repo=icattlecoder/chatgpt2codex --file=release.yml
+```
+
+trusted publishing 配置需要 npm 包的 owner/admin 权限；首次配置完成后，GitHub-hosted runner 会通过 OIDC 直接换取发布身份，并自动生成 provenance。
+
+当前 workflow 兼容两种模式：
+
+- 默认优先走 trusted publishing（不需要 `NPM_TOKEN`）
+- 如果仓库里仍存在 `NPM_TOKEN`，则自动回退到 token 发布，便于完成首次发布引导
 
 安装 npm 包时，`postinstall` 会从对应版本的 GitHub Release 下载二进制文件。

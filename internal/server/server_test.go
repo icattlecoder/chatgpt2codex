@@ -31,7 +31,7 @@ func TestHandlerUsesWorkspaceHeaderAndWritesAuditLog(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/tools/read", strings.NewReader(`{"path":"note.txt"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Workspace", overrideWorkspace)
-	request.Header.Set("X-Conversation-Id", "conv-1")
+	request.Header.Set("Openai-Conversation-Id", "conv-1")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 

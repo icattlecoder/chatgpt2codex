@@ -30,6 +30,7 @@ func Build(cwd string) string {
 		}
 	}
 	addGuideline("Be concise in your responses")
+	addGuideline("For multi-step tasks, use Markdown Todo checkboxes (- [ ]/- [x]), update them as you progress, and do not use code fences")
 	addGuideline("Show file paths clearly when working with files")
 
 	return fmt.Sprintf(`You are an expert coding assistant operating through chatgpt2codex, a local coding agent tool service. You help users by reading files, executing commands, editing code, and writing new files.
