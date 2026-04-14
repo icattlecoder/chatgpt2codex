@@ -11,7 +11,7 @@ import (
 
 func Build(cwd string) string {
 	visibleTools := make([]string, 0, len(tool.OrderedDefinitions))
-	guidelines := make([]string, 0, 8)
+	guidelines := make([]string, 0, 12)
 	seen := map[string]bool{}
 	addGuideline := func(line string) {
 		line = strings.TrimSpace(line)
@@ -24,7 +24,7 @@ func Build(cwd string) string {
 
 	addGuideline("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)")
 	for _, definition := range tool.OrderedDefinitions {
-		visibleTools = append(visibleTools, fmt.Sprintf("- %s: %s", definition.Name, definition.PromptSnippet))
+		visibleTools = append(visibleTools, fmt.Sprintf("- %s: %s", promptToolName(definition), definition.PromptSnippet))
 		for _, line := range definition.PromptGuidelines {
 			addGuideline(line)
 		}
@@ -42,6 +42,7 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 %s
+
 Current date: %s
 Current working directory: %s`,
 		strings.Join(visibleTools, "\n"),
@@ -57,4 +58,11 @@ func formatGuidelines(lines []string) string {
 		formatted = append(formatted, "- "+line)
 	}
 	return strings.Join(formatted, "\n")
+}
+
+func promptToolName(definition tool.Definition) string {
+	if strings.TrimSpace(definition.PromptName) != "" {
+		return definition.PromptName
+	}
+	return definition.Name
 }
