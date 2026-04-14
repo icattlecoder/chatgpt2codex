@@ -66,17 +66,20 @@ make help
 
 ```bash
 chatgpt2codex serve --workspace /path/to/project
+chatgpt2codex serve --workspace /path/to/project --model "GPT-5.4 Thinking"
 chatgpt2codex tools
 chatgpt2codex prompt
 ```
 
 主要命令：
 
-- `serve`：启动本地 HTTP 服务，暴露工具 API。
+- `serve`：启动本地 HTTP 服务，默认建立 cloudflare 公网地址，并按工作区自动创建或接管 chatgpt.com 上的 GPT。
 - `tools`：输出内嵌的工具 API 规范（源文件位于 `internal/docsasset/api/tools.api.yaml`）。
 - `prompt`：输出系统提示词内容。
 
-`serve` 命令支持 `--proxy cloudflare`，并且 cloudflare 隧道能力已经直接内嵌到 CLI 中，用户不需要额外安装 `cloudflared`。
+`serve` 命令默认启用内嵌的 cloudflare Quick Tunnel，用户不需要额外安装 `cloudflared`，也不再需要手工传 `--proxy`。
+
+首次执行 `serve` 时，程序会读取 `~/.chatgpt2codex/config.json`。如果当前工作区没有 GPT 记录，则会启动可见的 Chrome 浏览器，打开 `https://chatgpt.com/gpts/editor`，自动填写 GPT 名称、提示词、推荐模型和 Action 的 OpenAPI 架构，并在成功后把 `gpt_id` 写回配置文件。
 
 ## GitHub Actions
 

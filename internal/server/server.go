@@ -11,8 +11,8 @@ import (
 	"os"
 	"strings"
 
-	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
+	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
 	"github.com/icattlecoder/chatgpt2codex/internal/runtimecontext"
 	"github.com/icattlecoder/chatgpt2codex/internal/tool"
 )
@@ -142,6 +142,11 @@ func buildAPISpec(config Config, r *http.Request) string {
 			baseURL = normalizeBaseURL(configured)
 		}
 	}
+	return BuildAPISpec(baseURL)
+}
+
+func BuildAPISpec(publicBaseURL string) string {
+	baseURL := normalizeBaseURL(publicBaseURL)
 	if baseURL == "" {
 		return docsasset.ToolsAPISpec
 	}

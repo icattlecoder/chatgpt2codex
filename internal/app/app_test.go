@@ -3,12 +3,33 @@ package app
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/icattlecoder/chatgpt2codex/internal/config"
 	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
+	"github.com/icattlecoder/chatgpt2codex/internal/gpt"
 	"github.com/icattlecoder/chatgpt2codex/internal/proxy"
 )
+
+type stubGPTStore struct{}
+
+func (stubGPTStore) Load() (config.File, error) { return config.File{}, nil }
+func (stubGPTStore) Save(config.File) error     { return nil }
+
+type stubGPTEnsurer struct {
+	result  gpt.EnsureResult
+	err     error
+	called  bool
+	request gpt.CreateRequest
+}
+
+func (s *stubGPTEnsurer) Ensure(_ context.Context, request gpt.CreateRequest) (gpt.EnsureResult, error) {
+	s.called = true
+	s.request = request
+	return s.result, s.err
+}
 
 func TestToolsCommandPrintsEmbeddedSpec(t *testing.T) {
 	var stdout bytes.Buffer
@@ -51,10 +72,14 @@ func TestUnknownCommandIsRejected(t *testing.T) {
 	}
 }
 
-func TestRunServeWithProxyPrintsAPISpecURL(t *testing.T) {
+func TestRunServeStartsCloudflareAndPrintsAPISpecURL(t *testing.T) {
 	originalStartProxy := startProxy
+	originalNewConfigStore := newConfigStore
+	originalNewGPTEnsurer := newGPTEnsurer
 	t.Cleanup(func() {
 		startProxy = originalStartProxy
+		newConfigStore = originalNewConfigStore
+		newGPTEnsurer = originalNewGPTEnsurer
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -66,9 +91,17 @@ func TestRunServeWithProxyPrintsAPISpecURL(t *testing.T) {
 		cancel()
 		return &proxy.Session{PublicURL: publicURL}, nil
 	}
+	newConfigStore = func() (gpt.Store, error) {
+		return stubGPTStore{}, nil
+	}
+	ensurer := &stubGPTEnsurer{result: gpt.EnsureResult{Created: true, GPTID: "g-123"}}
+	newGPTEnsurer = func(store gpt.Store) (gptEnsurer, error) {
+		return ensurer, nil
+	}
 
 	var stdout bytes.Buffer
-	if err := runServe(ctx, t.TempDir(), "cloudflare", &stdout); err != nil {
+	workspace := t.TempDir()
+	if err := runServe(ctx, workspace, gpt.DefaultRecommendedModel, &stdout); err != nil {
 		t.Fatalf("runServe returned error: %v", err)
 	}
 
@@ -78,5 +111,55 @@ func TestRunServeWithProxyPrintsAPISpecURL(t *testing.T) {
 	}
 	if !strings.Contains(output, publicURL+"/api.yaml\n") {
 		t.Fatalf("expected api spec URL in output, got %q", output)
+	}
+	if !strings.Contains(output, "GPT created: g-123\n") {
+		t.Fatalf("expected GPT created output, got %q", output)
+	}
+	if !ensurer.called {
+		t.Fatalf("expected GPT ensurer to be called")
+	}
+	if ensurer.request.OpenAPISchema == "" {
+		t.Fatalf("expected OpenAPISchema to be populated")
+	}
+	if !strings.Contains(ensurer.request.OpenAPISchema, publicURL) {
+		t.Fatalf("expected OpenAPISchema to include public URL, got %q", ensurer.request.OpenAPISchema)
+	}
+	if !strings.Contains(ensurer.request.Instructions, "You are an expert coding assistant") {
+		t.Fatalf("expected prompt instructions to be populated")
+	}
+	if ensurer.request.GPTName != "Codex/"+filepath.Base(workspace) {
+		t.Fatalf("unexpected GPT name %q", ensurer.request.GPTName)
+	}
+}
+
+func TestRunServePrintsUpdateSkippedMessage(t *testing.T) {
+	originalStartProxy := startProxy
+	originalNewConfigStore := newConfigStore
+	originalNewGPTEnsurer := newGPTEnsurer
+	t.Cleanup(func() {
+		startProxy = originalStartProxy
+		newConfigStore = originalNewConfigStore
+		newGPTEnsurer = originalNewGPTEnsurer
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startProxy = func(ctx context.Context, kind, localURL string) (*proxy.Session, error) {
+		cancel()
+		return &proxy.Session{PublicURL: "https://public.example.com"}, nil
+	}
+	newConfigStore = func() (gpt.Store, error) {
+		return stubGPTStore{}, nil
+	}
+	newGPTEnsurer = func(store gpt.Store) (gptEnsurer, error) {
+		return &stubGPTEnsurer{result: gpt.EnsureResult{GPTID: "g-existing", UpdateSkipped: true}}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := runServe(ctx, t.TempDir(), gpt.DefaultRecommendedModel, &stdout); err != nil {
+		t.Fatalf("runServe returned error: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "GPT update skipped (not implemented): g-existing\n") {
+		t.Fatalf("expected update skipped message, got %q", stdout.String())
 	}
 }
