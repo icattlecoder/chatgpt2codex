@@ -137,6 +137,52 @@ func TestRuntimeContextHandlerReturnsPlainJSONAndWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestAPISpecHandlerUsesConfiguredPublicURL(t *testing.T) {
+	handler := NewHandler(Config{
+		DefaultWorkspace: t.TempDir(),
+		PublicBaseURL: func() string {
+			return "https://demo.trycloudflare.com"
+		},
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api.yaml", nil)
+	request.Host = "127.0.0.1:8080"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/yaml; charset=utf-8" {
+		t.Fatalf("unexpected content type %q", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "https://demo.trycloudflare.com") {
+		t.Fatalf("expected api spec to include public URL, got %q", body)
+	}
+	if strings.Contains(body, "http://127.0.0.1:8080") {
+		t.Fatalf("expected default local URL to be replaced, got %q", body)
+	}
+}
+
+func TestAPISpecHandlerFallsBackToForwardedHeaders(t *testing.T) {
+	handler := NewHandler(Config{DefaultWorkspace: t.TempDir()})
+
+	request := httptest.NewRequest(http.MethodGet, "/api.yaml", nil)
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-Host", "public.example.com")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "https://public.example.com") {
+		t.Fatalf("expected api spec to include forwarded public URL, got %q", body)
+	}
+}
+
 func TestListenFirstAvailableSkipsBusyPort(t *testing.T) {
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -73,10 +73,10 @@ chatgpt2codex prompt
 主要命令：
 
 - `serve`：启动本地 HTTP 服务，暴露工具 API。
-- `tools`：输出 `docs/tools.api.yaml`。
+- `tools`：输出内嵌的工具 API 规范（源文件位于 `internal/docsasset/api/tools.api.yaml`）。
 - `prompt`：输出系统提示词内容。
 
-`serve` 命令也支持 `--proxy ngrok` 或 `--proxy cloudflare`。
+`serve` 命令支持 `--proxy cloudflare`，并且 cloudflare 隧道能力已经直接内嵌到 CLI 中，用户不需要额外安装 `cloudflared`。
 
 ## GitHub Actions
 

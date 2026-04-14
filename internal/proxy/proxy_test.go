@@ -2,55 +2,130 @@ package proxy
 
 import (
 	"context"
-	"io"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-type fakeStarter struct {
-	process Process
-	err     error
-}
+func TestStartRejectsUnsupportedProxy(t *testing.T) {
+	t.Parallel()
 
-func (f fakeStarter) Start(_ context.Context, _ string, _ ...string) (Process, error) {
-	return f.process, f.err
-}
-
-type fakeProcess struct {
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-	wait   error
-}
-
-func (f fakeProcess) Stdout() io.ReadCloser { return f.stdout }
-func (f fakeProcess) Stderr() io.ReadCloser { return f.stderr }
-func (f fakeProcess) Wait() error           { return f.wait }
-func (f fakeProcess) Kill() error           { return nil }
-
-func TestStartParsesCloudflareURL(t *testing.T) {
-	process := fakeProcess{
-		stdout: io.NopCloser(strings.NewReader("Starting tunnel\nhttps://demo.trycloudflare.com\n")),
-		stderr: io.NopCloser(strings.NewReader("")),
+	_, err := Start(context.Background(), "ngrok", "http://127.0.0.1:8080")
+	if err == nil {
+		t.Fatal("expected Start to reject ngrok")
 	}
-	session, err := Start(context.Background(), fakeStarter{process: process}, "cloudflare", "http://127.0.0.1:8080")
+	if !strings.Contains(err.Error(), `unsupported proxy "ngrok"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStartUsesEmbeddedCloudflareTunnel(t *testing.T) {
+	original := startEmbeddedCloudflareTunnel
+	t.Cleanup(func() {
+		startEmbeddedCloudflareTunnel = original
+	})
+
+	called := false
+	startEmbeddedCloudflareTunnel = func(_ context.Context, localURL string) (*Session, error) {
+		called = true
+		if localURL != "http://127.0.0.1:8080" {
+			t.Fatalf("unexpected local url %q", localURL)
+		}
+		return &Session{PublicURL: "https://demo.trycloudflare.com"}, nil
+	}
+
+	session, err := Start(context.Background(), "cloudflare", "http://127.0.0.1:8080")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected embedded cloudflare tunnel starter to be called")
 	}
 	if session.PublicURL != "https://demo.trycloudflare.com" {
 		t.Fatalf("unexpected public url %q", session.PublicURL)
 	}
 }
 
-func TestStartParsesNgrokURL(t *testing.T) {
-	process := fakeProcess{
-		stdout: io.NopCloser(strings.NewReader("{\"msg\":\"started tunnel\",\"url\":\"https://demo.ngrok-free.app\"}\n")),
-		stderr: io.NopCloser(strings.NewReader("")),
-	}
-	session, err := Start(context.Background(), fakeStarter{process: process}, "ngrok", "http://127.0.0.1:8080")
+func TestRequestQuickTunnelParsesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		if r.URL.Path != "/tunnel" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.Header.Get("User-Agent"); got == "" {
+			t.Fatal("expected user-agent header")
+		}
+
+		payload := quickTunnelResponse{
+			Success: true,
+			Result: quickTunnelResult{
+				ID:         "11111111-1111-1111-1111-111111111111",
+				Hostname:   "demo.trycloudflare.com",
+				AccountTag: "acct-123",
+				Secret:     []byte("secret-bytes"),
+			},
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer server.Close()
+
+	original := quickTunnelServiceURL
+	quickTunnelServiceURL = server.URL
+	defer func() {
+		quickTunnelServiceURL = original
+	}()
+
+	session, err := requestQuickTunnel(context.Background())
 	if err != nil {
-		t.Fatalf("Start returned error: %v", err)
+		t.Fatalf("requestQuickTunnel returned error: %v", err)
 	}
-	if session.PublicURL != "https://demo.ngrok-free.app" {
+	if session.Hostname != "demo.trycloudflare.com" {
+		t.Fatalf("unexpected hostname %q", session.Hostname)
+	}
+	if session.PublicURL != "https://demo.trycloudflare.com" {
 		t.Fatalf("unexpected public url %q", session.PublicURL)
+	}
+	if session.Credentials.AccountTag != "acct-123" {
+		t.Fatalf("unexpected account tag %q", session.Credentials.AccountTag)
+	}
+	if got := string(session.Credentials.TunnelSecret); got != "secret-bytes" {
+		t.Fatalf("unexpected tunnel secret %q", got)
+	}
+}
+
+func TestNewCloudflareCLIContextPrefersHTTP2(t *testing.T) {
+	t.Parallel()
+
+	cliCtx, err := newCloudflareCLIContext(context.Background(), "http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("newCloudflareCLIContext returned error: %v", err)
+	}
+
+	if got := cliCtx.String("url"); got != "http://127.0.0.1:8080" {
+		t.Fatalf("unexpected url %q", got)
+	}
+	if got := cliCtx.String("protocol"); got != "http2" {
+		t.Fatalf("unexpected protocol %q", got)
+	}
+}
+
+func TestStartupLogBufferDetectsReadyLine(t *testing.T) {
+	buffer := newStartupLogBuffer(3, "Registered tunnel connection")
+	if _, err := buffer.Write([]byte("first\nRegistered tunnel connection\n")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+
+	select {
+	case <-buffer.Ready():
+	default:
+		t.Fatal("expected ready signal")
+	}
+
+	if got := buffer.String(); !strings.Contains(got, "Registered tunnel connection") {
+		t.Fatalf("unexpected buffer contents %q", got)
 	}
 }

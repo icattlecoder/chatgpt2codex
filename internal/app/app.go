@@ -9,17 +9,22 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
-	docsasset "github.com/icattlecoder/chatgpt2codex/docs"
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
+	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
 	"github.com/icattlecoder/chatgpt2codex/internal/prompt"
 	"github.com/icattlecoder/chatgpt2codex/internal/proxy"
 	"github.com/icattlecoder/chatgpt2codex/internal/server"
 	"github.com/icattlecoder/chatgpt2codex/internal/tool"
 )
+
+var startProxy = func(ctx context.Context, kind, localURL string) (*proxy.Session, error) {
+	return proxy.Start(ctx, kind, localURL)
+}
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	cmd, err := NewRootCommand(stdout, stderr)
@@ -77,7 +82,7 @@ func newServeCommand(defaultWorkspace string, stdout io.Writer) *cobra.Command {
 
 	cmd.Flags().StringVar(&workspace, "workspace", defaultWorkspace, "default workspace")
 	cmd.Flags().StringVar(&legacyWorkspace, "worksapce", "", "deprecated alias for --workspace")
-	cmd.Flags().StringVar(&proxyProvider, "proxy", "", "proxy provider: ngrok or cloudflare")
+	cmd.Flags().StringVar(&proxyProvider, "proxy", "", "proxy provider: cloudflare")
 	_ = cmd.Flags().MarkDeprecated("worksapce", "use --workspace instead")
 	_ = cmd.Flags().MarkHidden("worksapce")
 
@@ -87,7 +92,7 @@ func newServeCommand(defaultWorkspace string, stdout io.Writer) *cobra.Command {
 func newToolsCommand(stdout io.Writer) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tools",
-		Short: "Print docs/tools.api.yaml",
+		Short: "Print embedded tools API spec",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, err := io.WriteString(stdout, docsasset.ToolsAPISpec)
@@ -126,9 +131,16 @@ func runServe(ctx context.Context, workspace, proxyProvider string, stdout io.Wr
 	if err != nil {
 		return err
 	}
+	var publicBaseURL atomic.Value
+	publicBaseURL.Store("")
+
 	handler := server.NewHandler(server.Config{
 		DefaultWorkspace: workspace,
 		AuditLogger:      logger,
+		PublicBaseURL: func() string {
+			value, _ := publicBaseURL.Load().(string)
+			return value
+		},
 	})
 
 	listener, err := server.ListenFirstAvailable(tool.DefaultStartPort)
@@ -154,12 +166,13 @@ func runServe(ctx context.Context, workspace, proxyProvider string, stdout io.Wr
 
 	var proxySession *proxy.Session
 	if strings.TrimSpace(proxyProvider) != "" {
-		proxySession, err = proxy.Start(runContext, proxy.DefaultStarter(), strings.TrimSpace(proxyProvider), localURL)
+		proxySession, err = startProxy(runContext, strings.TrimSpace(proxyProvider), localURL)
 		if err != nil {
 			_ = httpServer.Shutdown(context.Background())
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "Public URL: %s\n", proxySession.PublicURL); err != nil {
+		publicBaseURL.Store(proxySession.PublicURL)
+		if _, err := fmt.Fprintf(stdout, "Public URL: %s\n%s\n", proxySession.PublicURL, strings.TrimRight(proxySession.PublicURL, "/")+"/api.yaml"); err != nil {
 			return err
 		}
 	}
