@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${1:-"$ROOT_DIR/dist"}"
+if [[ "$DIST_DIR" != /* ]]; then
+  DIST_DIR="$ROOT_DIR/$DIST_DIR"
+fi
 APP_NAME="chatgpt2codex"
 CHECKSUMS_FILE="${APP_NAME}_checksums.txt"
 
