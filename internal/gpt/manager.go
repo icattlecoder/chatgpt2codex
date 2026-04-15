@@ -167,6 +167,10 @@ func GPTNameForWorkspace(workspace string) string {
 	return fmt.Sprintf("Codex/%s", WorkspaceName(workspace))
 }
 
+func GPTDescriptionForWorkspace(workspace string) string {
+	return fmt.Sprintf("Working In %s", WorkspaceName(workspace))
+}
+
 func (noopUpdater) Update(context.Context, UpdateRequest) error {
 	return ErrUpdateNotImplemented
 }

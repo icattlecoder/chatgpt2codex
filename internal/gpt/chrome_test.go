@@ -195,6 +195,20 @@ func TestChromeAutomationDefaultsToEnglishUI(t *testing.T) {
 	}
 }
 
+func TestChromeAutomationSetsWorkspaceDescription(t *testing.T) {
+	source, err := os.ReadFile("chrome.go")
+	if err != nil {
+		t.Fatalf("failed to read chrome.go: %v", err)
+	}
+	content := string(source)
+	if !strings.Contains(content, `gizmo-description-input`) {
+		t.Fatalf("expected chrome automation to target the GPT description input")
+	}
+	if count := strings.Count(content, `GPTDescriptionForWorkspace(request.Workspace)`); count != 2 {
+		t.Fatalf("expected create and update flows to set workspace description, got %d occurrences", count)
+	}
+}
+
 func extractFunctionSource(source, signature string) string {
 	start := strings.Index(source, signature)
 	if start < 0 {

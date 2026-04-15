@@ -20,28 +20,29 @@ import (
 )
 
 const (
-	chromeDebugEnv          = "CHROME_DEBUG"
-	chromeUILanguage        = "en-US"
-	chromeLocaleOverride    = "en_US"
-	chromeAcceptLanguage    = "en-US,en;q=0.9"
-	homeURL                 = "https://chatgpt.com/"
-	editorURL               = "https://chatgpt.com/gpts/editor"
-	gptURLPrefix            = "https://chatgpt.com/g/"
-	overallCreateTimeout    = 10 * time.Minute
-	editorReadyTimeout      = 10 * time.Minute
-	actionReadyTimeout      = 45 * time.Second
-	saveReadyTimeout        = 2 * time.Minute
-	postSaveSettleDelay     = 1500 * time.Millisecond
-	postUpdateSettleDelay   = 5 * time.Second
-	loginDetectTimeout      = 8 * time.Second
-	stepPollInterval        = 1500 * time.Millisecond
-	browserShutdownTimeout  = 10 * time.Second
-	loginButtonSelector     = `[data-testid="login-button"]`
-	configureButtonSelector = `[data-testid="gizmo-editor-configure-button"]`
-	nameInputSelector       = `[data-testid="gizmo-name-input"]`
-	instructionsSelector    = `[data-testid="gizmo-instructions-input"]`
-	saveButtonSelector      = `[data-testid="save-gizmo-button"]`
-	savedGPTURLButtonSel    = `[data-testid="copy-saved-gpt-url-button"]`
+	chromeDebugEnv           = "CHROME_DEBUG"
+	chromeUILanguage         = "en-US"
+	chromeLocaleOverride     = "en_US"
+	chromeAcceptLanguage     = "en-US,en;q=0.9"
+	homeURL                  = "https://chatgpt.com/"
+	editorURL                = "https://chatgpt.com/gpts/editor"
+	gptURLPrefix             = "https://chatgpt.com/g/"
+	overallCreateTimeout     = 10 * time.Minute
+	editorReadyTimeout       = 10 * time.Minute
+	actionReadyTimeout       = 45 * time.Second
+	saveReadyTimeout         = 2 * time.Minute
+	postSaveSettleDelay      = 1500 * time.Millisecond
+	postUpdateSettleDelay    = 5 * time.Second
+	loginDetectTimeout       = 8 * time.Second
+	stepPollInterval         = 1500 * time.Millisecond
+	browserShutdownTimeout   = 10 * time.Second
+	loginButtonSelector      = `[data-testid="login-button"]`
+	configureButtonSelector  = `[data-testid="gizmo-editor-configure-button"]`
+	nameInputSelector        = `[data-testid="gizmo-name-input"]`
+	descriptionInputSelector = `[data-testid="gizmo-description-input"]`
+	instructionsSelector     = `[data-testid="gizmo-instructions-input"]`
+	saveButtonSelector       = `[data-testid="save-gizmo-button"]`
+	savedGPTURLButtonSel     = `[data-testid="copy-saved-gpt-url-button"]`
 )
 
 var gptIDPattern = regexp.MustCompile(`(?i)/(?:gpts/editor|g)/(g-[0-9a-z]{32})(?:-[^/?#\s"'<>]+)?`)
@@ -133,6 +134,11 @@ func (c *ChromeCreator) Create(ctx context.Context, request CreateRequest) (Crea
 		return waitForAndSetValue(runCtx, nameInputSelector, request.GPTName)
 	}); err != nil {
 		return CreateResult{}, fmt.Errorf("failed to set gpt name: %w", err)
+	}
+	if err := runDebugStep(runCtx, request.ProgressWriter, "Fill GPT description", func() error {
+		return waitForAndSetValue(runCtx, descriptionInputSelector, GPTDescriptionForWorkspace(request.Workspace))
+	}); err != nil {
+		return CreateResult{}, fmt.Errorf("failed to set gpt description: %w", err)
 	}
 	if err := runDebugStep(runCtx, request.ProgressWriter, "Fill GPT instructions", func() error {
 		return waitForAndSetValue(runCtx, instructionsSelector, request.Instructions)
@@ -267,6 +273,11 @@ func (c *ChromeCreator) Update(ctx context.Context, request UpdateRequest) error
 		return waitForAndSetValue(runCtx, nameInputSelector, request.GPTName)
 	}); err != nil {
 		return fmt.Errorf("failed to set gpt name: %w", err)
+	}
+	if err := runDebugStep(runCtx, request.ProgressWriter, "Fill GPT description", func() error {
+		return waitForAndSetValue(runCtx, descriptionInputSelector, GPTDescriptionForWorkspace(request.Workspace))
+	}); err != nil {
+		return fmt.Errorf("failed to set gpt description: %w", err)
 	}
 	if err := runDebugStep(runCtx, request.ProgressWriter, "Fill GPT instructions", func() error {
 		return waitForAndSetValue(runCtx, instructionsSelector, request.Instructions)

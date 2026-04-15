@@ -121,3 +121,9 @@ func TestGPTNameForWorkspaceUsesDirectoryName(t *testing.T) {
 		t.Fatalf("expected Codex/my-project, got %q", got)
 	}
 }
+
+func TestGPTDescriptionForWorkspaceUsesDirectoryName(t *testing.T) {
+	if got := GPTDescriptionForWorkspace("/tmp/my-project"); got != "Working In my-project" {
+		t.Fatalf("expected Working In my-project, got %q", got)
+	}
+}
