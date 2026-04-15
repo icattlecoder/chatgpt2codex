@@ -2,5 +2,5 @@ package docsasset
 
 import _ "embed"
 
-//go:embed tools.api.yaml
+//go:embed api/tools.api.yaml
 var ToolsAPISpec string

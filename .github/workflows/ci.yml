@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags-ignore:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Build CLI
+        run: go build -trimpath -o /tmp/chatgpt2codex ./cmd/chatgpt2codex
+
+      - name: Validate installer scripts
+        run: |
+          bash -n install.sh
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoLogo -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+          fi
+
+      - name: Build release archives
+        run: |
+          bash scripts/build-release.sh /tmp/chatgpt2codex-dist
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_linux_amd64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_linux_arm64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_darwin_amd64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_darwin_arm64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_windows_amd64.zip
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_windows_arm64.zip
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_checksums.txt

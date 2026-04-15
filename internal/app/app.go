@@ -3,74 +3,106 @@ package app
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
-	docsasset "github.com/icattlecoder/chatgpt2codex/docs"
+	"github.com/spf13/cobra"
+
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
+	"github.com/icattlecoder/chatgpt2codex/internal/config"
+	"github.com/icattlecoder/chatgpt2codex/internal/gpt"
 	"github.com/icattlecoder/chatgpt2codex/internal/prompt"
 	"github.com/icattlecoder/chatgpt2codex/internal/proxy"
 	"github.com/icattlecoder/chatgpt2codex/internal/server"
 	"github.com/icattlecoder/chatgpt2codex/internal/tool"
 )
 
-func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		printUsage(stdout)
-		return nil
-	}
-
-	switch args[0] {
-	case "serve":
-		return runServe(ctx, args[1:], stdout, stderr)
-	case "tools":
-		_, err := io.WriteString(stdout, docsasset.ToolsAPISpec)
-		return err
-	case "promt", "prompt":
-		return runPrompt(args[1:], stdout)
-	case "-h", "--help", "help":
-		printUsage(stdout)
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q", args[0])
-	}
+var startProxy = func(ctx context.Context, kind, localURL string) (*proxy.Session, error) {
+	return proxy.Start(ctx, kind, localURL)
 }
 
-func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	defaultWorkspace, err := os.Getwd()
+var generateAPIKey = server.GenerateAPIKey
+
+type gptEnsurer interface {
+	Ensure(context.Context, gpt.CreateRequest) (gpt.EnsureResult, error)
+}
+
+var newConfigStore = func() (gpt.Store, error) {
+	return config.NewStore("")
+}
+
+var newGPTEnsurer = func(store gpt.Store) (gptEnsurer, error) {
+	profileDir, err := config.DefaultChromeProfileDir()
+	if err != nil {
+		return nil, err
+	}
+	creator, err := gpt.NewChromeCreator(profileDir)
+	if err != nil {
+		return nil, err
+	}
+	return gpt.NewManager(store, creator, creator), nil
+}
+
+func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	cmd, err := NewRootCommand(stdout, stderr)
 	if err != nil {
 		return err
 	}
-	workspaceFlag := fs.String("worksapce", defaultWorkspace, "default workspace")
-	workspaceAlias := fs.String("workspace", "", "default workspace")
-	proxyFlag := fs.String("proxy", "", "proxy provider: ngrok or cloudflare")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if extra := fs.Args(); len(extra) > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(extra, " "))
+	cmd.SetArgs(args)
+	return cmd.ExecuteContext(ctx)
+}
+
+func NewRootCommand(stdout, stderr io.Writer) (*cobra.Command, error) {
+	defaultWorkspace, err := os.Getwd()
+	if err != nil {
+		return nil, err
 	}
 
-	workspace := *workspaceFlag
-	if strings.TrimSpace(*workspaceAlias) != "" {
-		workspace = *workspaceAlias
+	var model string
+	rootCmd := &cobra.Command{
+		Use:           "chatgpt2codex",
+		Short:         "Expose local tool APIs for code assistants",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServe(cmd.Context(), defaultWorkspace, model, stdout)
+		},
+	}
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.Flags().StringVar(&model, "model", gpt.DefaultRecommendedModel, "recommended GPT model")
+
+	return rootCmd, nil
+}
+
+func runServe(ctx context.Context, workspace, model string, stdout io.Writer) error {
+	resolvedWorkspace, err := resolveServeWorkspace(workspace)
+	if err != nil {
+		return err
 	}
 
 	logger, err := audit.NewLogger("")
 	if err != nil {
 		return err
 	}
+	apiKey, err := generateAPIKey()
+	if err != nil {
+		return err
+	}
+	var publicBaseURL atomic.Value
+	publicBaseURL.Store("")
+
 	handler := server.NewHandler(server.Config{
-		DefaultWorkspace: workspace,
+		DefaultWorkspace: resolvedWorkspace,
 		AuditLogger:      logger,
+		APIKey:           apiKey,
 	})
 
 	listener, err := server.ListenFirstAvailable(tool.DefaultStartPort)
@@ -94,22 +126,61 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	runContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var proxySession *proxy.Session
-	if strings.TrimSpace(*proxyFlag) != "" {
-		proxySession, err = proxy.Start(runContext, proxy.DefaultStarter(), strings.TrimSpace(*proxyFlag), localURL)
-		if err != nil {
-			_ = httpServer.Shutdown(context.Background())
-			return err
-		}
-		if _, err := fmt.Fprintf(stdout, "Public URL: %s\n", proxySession.PublicURL); err != nil {
-			return err
-		}
+	proxySession, err := startProxy(runContext, "cloudflare", localURL)
+	if err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		return err
+	}
+	publicBaseURL.Store(proxySession.PublicURL)
+	if _, err := fmt.Fprintf(stdout, "Public URL: %s\nAPI Key: %s\n", proxySession.PublicURL, apiKey); err != nil {
+		return err
 	}
 	defer func() {
 		if proxySession != nil {
 			_ = proxySession.Close()
 		}
 	}()
+
+	store, err := newConfigStore()
+	if err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		return err
+	}
+	ensurer, err := newGPTEnsurer(store)
+	if err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		return err
+	}
+
+	publicURL, _ := publicBaseURL.Load().(string)
+	ensureResult, err := ensurer.Ensure(runContext, gpt.CreateRequest{
+		Workspace:        resolvedWorkspace,
+		GPTName:          gpt.GPTNameForWorkspace(resolvedWorkspace),
+		Instructions:     prompt.Build(resolvedWorkspace),
+		OpenAPISchema:    server.BuildAPISpec(publicURL),
+		RecommendedModel: firstNonEmpty(strings.TrimSpace(model), gpt.DefaultRecommendedModel),
+		ActionAPIKey:     apiKey,
+		ProgressWriter:   stdout,
+	})
+	if err != nil {
+		_ = httpServer.Shutdown(context.Background())
+		return err
+	}
+
+	switch {
+	case ensureResult.Created:
+		if _, err := fmt.Fprintf(stdout, "GPT created: %s\n", ensureResult.GPTID); err != nil {
+			return err
+		}
+	case ensureResult.Updated:
+		if _, err := fmt.Fprintf(stdout, "GPT updated: %s\n", ensureResult.GPTID); err != nil {
+			return err
+		}
+	case ensureResult.UpdateSkipped:
+		if _, err := fmt.Fprintf(stdout, "GPT update skipped (not implemented): %s\n", ensureResult.GPTID); err != nil {
+			return err
+		}
+	}
 
 	select {
 	case err := <-serveErr:
@@ -119,31 +190,30 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 }
 
-func runPrompt(args []string, stdout io.Writer) error {
-	fs := flag.NewFlagSet("promt", flag.ContinueOnError)
-	defaultWorkspace, err := os.Getwd()
+func resolveServeWorkspace(workspace string) (string, error) {
+	resolvedWorkspace, err := tool.ResolveWorkspace(workspace, "")
 	if err != nil {
-		return err
-	}
-	workspaceFlag := fs.String("worksapce", defaultWorkspace, "working directory")
-	workspaceAlias := fs.String("workspace", "", "working directory")
-	if err := fs.Parse(args); err != nil {
-		return err
+		return "", err
 	}
 
-	workspace := *workspaceFlag
-	if strings.TrimSpace(*workspaceAlias) != "" {
-		workspace = *workspaceAlias
+	info, err := os.Stat(resolvedWorkspace)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("workspace not found: %s", resolvedWorkspace)
+		}
+		return "", err
 	}
-	_, err = io.WriteString(stdout, prompt.Build(workspace))
-	return err
+	if !info.IsDir() {
+		return "", fmt.Errorf("workspace is not a directory: %s", resolvedWorkspace)
+	}
+	return resolvedWorkspace, nil
 }
 
-func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: chatgpt2codex <command> [options]")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  serve   Start the tool API server")
-	fmt.Fprintln(w, "  tools   Print docs/tools.api.yaml")
-	fmt.Fprintln(w, "  promt   Print the system prompt")
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

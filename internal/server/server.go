@@ -12,12 +12,15 @@ import (
 	"strings"
 
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
+	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
+	"github.com/icattlecoder/chatgpt2codex/internal/runtimecontext"
 	"github.com/icattlecoder/chatgpt2codex/internal/tool"
 )
 
 type Config struct {
 	DefaultWorkspace string
 	AuditLogger      *audit.Logger
+	APIKey           string
 }
 
 type Executor func(context.Context, string, []byte) (tool.Response, error)
@@ -35,8 +38,9 @@ func NewHandler(config Config) http.Handler {
 
 	mux := http.NewServeMux()
 	for name, executor := range executors {
-		mux.HandleFunc("POST /tools/"+name, makeToolHandler(config, name, executor))
+		mux.HandleFunc("POST /tools/"+name, requireAPIKey(config.APIKey, makeToolHandler(config, name, executor)))
 	}
+	mux.HandleFunc("POST /context/runtime", requireAPIKey(config.APIKey, makeRuntimeContextHandler(config)))
 	return mux
 }
 
@@ -58,24 +62,8 @@ func makeToolHandler(config Config, toolName string, executor Executor) http.Han
 			return
 		}
 
-		workspace, err := tool.ResolveWorkspace(config.DefaultWorkspace, r.Header.Get("X-Workspace"))
-		if err == nil {
-			info, statErr := os.Stat(workspace)
-			if statErr != nil {
-				if os.IsNotExist(statErr) {
-					err = tool.ValidationError("workspace not found: " + workspace)
-				} else {
-					err = tool.ExecutionError(statErr.Error())
-				}
-			} else if !info.IsDir() {
-				err = tool.ValidationError("workspace is not a directory: " + workspace)
-			}
-		}
-
-		conversationID := strings.TrimSpace(r.Header.Get("X-Conversation-Id"))
-		if conversationID == "" {
-			conversationID = generateConversationID()
-		}
+		workspace, err := resolveRequestWorkspace(config.DefaultWorkspace)
+		conversationID := conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id"))
 
 		statusCode := http.StatusOK
 		var response tool.Response
@@ -99,29 +87,86 @@ func makeToolHandler(config Config, toolName string, executor Executor) http.Han
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(statusCode)
-		_, _ = w.Write(responseBody)
-
-		if config.AuditLogger != nil {
-			_ = config.AuditLogger.Append(
-				conversationID,
-				toolName,
-				workspace,
-				audit.RequestSnapshot{
-					Method:  r.Method,
-					Path:    r.URL.Path,
-					Headers: cloneHeaders(r.Header),
-					Query:   r.URL.Query(),
-					Body:    parseJSONForLog(body),
-				},
-				audit.ResponseSnapshot{
-					Status: statusCode,
-					Body:   parseJSONForLog(responseBody),
-				},
-			)
-		}
+		writeJSONResponse(w, statusCode, responseBody)
+		appendAuditLog(config.AuditLogger, conversationID, toolName, workspace, r, body, statusCode, responseBody)
 	}
+}
+
+func makeRuntimeContextHandler(config Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeToolError(w, tool.ValidationError("failed to read request body"))
+			return
+		}
+
+		workspace, err := resolveRequestWorkspace(config.DefaultWorkspace)
+		conversationID := conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id"))
+
+		statusCode := http.StatusOK
+		responseBody, err := buildRuntimeContextResponseBody(workspace, body, err)
+		if err != nil {
+			statusCode = tool.StatusCode(err)
+			responseBody, err = json.Marshal(tool.Response{
+				Content: []tool.ContentItem{{Type: "text", Text: err.Error()}},
+			})
+			if err != nil {
+				writeToolError(w, tool.ExecutionError(err.Error()))
+				return
+			}
+		}
+
+		writeJSONResponse(w, statusCode, responseBody)
+		appendAuditLog(config.AuditLogger, conversationID, "get_runtime_context", workspace, r, body, statusCode, responseBody)
+	}
+}
+
+func BuildAPISpec(publicBaseURL string) string {
+	baseURL := normalizeBaseURL(publicBaseURL)
+	if baseURL == "" {
+		return docsasset.ToolsAPISpec
+	}
+	return strings.Replace(docsasset.ToolsAPISpec, "http://127.0.0.1:8080", baseURL, 1)
+}
+
+func normalizeBaseURL(value string) string {
+	return strings.TrimRight(strings.TrimSpace(value), "/")
+}
+
+func buildRuntimeContextResponseBody(workspace string, body []byte, priorErr error) ([]byte, error) {
+	if priorErr != nil {
+		return nil, priorErr
+	}
+
+	response, err := runtimecontext.Run(workspace, body)
+	if err != nil {
+		return nil, err
+	}
+
+	responseBody, err := json.Marshal(response)
+	if err != nil {
+		return nil, tool.ExecutionError(err.Error())
+	}
+	return responseBody, nil
+}
+
+func resolveRequestWorkspace(defaultWorkspace string) (string, error) {
+	workspace, err := tool.ResolveWorkspace(defaultWorkspace, "")
+	if err != nil {
+		return "", err
+	}
+
+	info, statErr := os.Stat(workspace)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return workspace, tool.ValidationError("workspace not found: " + workspace)
+		}
+		return workspace, tool.ExecutionError(statErr.Error())
+	}
+	if !info.IsDir() {
+		return workspace, tool.ValidationError("workspace is not a directory: " + workspace)
+	}
+	return workspace, nil
 }
 
 func writeToolError(w http.ResponseWriter, err error) {
@@ -132,17 +177,41 @@ func writeToolError(w http.ResponseWriter, err error) {
 		},
 	}
 	body, _ := json.Marshal(response)
+	writeJSONResponse(w, statusCode, body)
+}
+
+func writeJSONResponse(w http.ResponseWriter, statusCode int, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_, _ = w.Write(body)
 }
 
+func appendAuditLog(logger *audit.Logger, conversationID, toolName, workspace string, r *http.Request, requestBody []byte, statusCode int, responseBody []byte) {
+	if logger == nil {
+		return
+	}
+	_ = logger.Append(
+		conversationID,
+		toolName,
+		workspace,
+		audit.RequestSnapshot{
+			Method:  r.Method,
+			Path:    r.URL.Path,
+			Headers: cloneHeaders(r.Header),
+			Query:   r.URL.Query(),
+			Body:    parseJSONForLog(requestBody),
+		},
+		audit.ResponseSnapshot{
+			Status: statusCode,
+			Body:   parseJSONForLog(responseBody),
+		},
+	)
+}
+
 func cloneHeaders(headers http.Header) map[string][]string {
 	cloned := make(map[string][]string, len(headers))
 	for key, values := range headers {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		cloned[key] = copied
+		cloned[key] = sanitizeHeaderValues(key, values)
 	}
 	return cloned
 }
@@ -156,6 +225,14 @@ func parseJSONForLog(body []byte) any {
 		return value
 	}
 	return string(body)
+}
+
+func conversationIDFromHeader(raw string) string {
+	conversationID := strings.TrimSpace(raw)
+	if conversationID == "" {
+		conversationID = generateConversationID()
+	}
+	return conversationID
 }
 
 func generateConversationID() string {

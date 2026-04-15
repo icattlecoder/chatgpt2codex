@@ -5,13 +5,13 @@ info:
   description: Local tool service for chatgpt2codex.
 servers:
   - url: http://127.0.0.1:8080
+security:
+  - bearerAuth: []
 paths:
   /tools/read:
     post:
       summary: Read file contents
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: readFile
       requestBody:
         required: true
         content:
@@ -21,6 +21,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -28,9 +30,7 @@ paths:
   /tools/bash:
     post:
       summary: Execute a shell command
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: executeBash
       requestBody:
         required: true
         content:
@@ -40,6 +40,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -47,9 +49,7 @@ paths:
   /tools/edit:
     post:
       summary: Edit a file with exact replacements
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: editFile
       requestBody:
         required: true
         content:
@@ -59,6 +59,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -66,9 +68,7 @@ paths:
   /tools/write:
     post:
       summary: Create or overwrite a file
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: writeFile
       requestBody:
         required: true
         content:
@@ -78,6 +78,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -85,9 +87,7 @@ paths:
   /tools/grep:
     post:
       summary: Search file contents
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: grepFiles
       requestBody:
         required: true
         content:
@@ -97,6 +97,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -104,9 +106,7 @@ paths:
   /tools/find:
     post:
       summary: Search files by glob
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: findFiles
       requestBody:
         required: true
         content:
@@ -116,6 +116,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -123,9 +125,7 @@ paths:
   /tools/ls:
     post:
       summary: List directory contents
-      parameters:
-        - $ref: '#/components/parameters/XWorkspace'
-        - $ref: '#/components/parameters/XConversationId'
+      operationId: listDirectory
       requestBody:
         required: true
         content:
@@ -135,21 +135,47 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Invalid request
+        '500':
+          description: Tool execution failed
+  /context/runtime:
+    post:
+      summary: Load repository instructions and available skills for the current working directory. Returns a SystemInstruct block containing AGENTS.md and a skills list with name, description, and SKILL.md path.
+      operationId: get_runtime_context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuntimeContextRequest'
+      responses:
+        '200':
+          description: Runtime context response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeContextResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
           description: Tool execution failed
 components:
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer API key.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
   parameters:
-    XWorkspace:
-      name: X-Workspace
-      in: header
-      required: false
-      schema:
-        type: string
-      description: Override the default workspace for this request.
     XConversationId:
-      name: X-Conversation-Id
+      name: Openai-Conversation-Id
       in: header
       required: false
       schema:
@@ -242,3 +268,19 @@ components:
           type: string
         limit:
           type: integer
+    RuntimeContextRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        cwd:
+          type: string
+          description: Current working directory for locating AGENTS.md and skills.
+      required: [cwd]
+    RuntimeContextResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        system_instruct:
+          type: string
+          description: SystemInstruct block containing AGENTS.md content and discovered skills.
+      required: [system_instruct]
