@@ -187,7 +187,7 @@ func TestRunServeStartsCloudflareAndPrintsPublicURL(t *testing.T) {
 	if !strings.Contains(ensurer.request.OpenAPISchema, publicURL) {
 		t.Fatalf("expected OpenAPISchema to include public URL, got %q", ensurer.request.OpenAPISchema)
 	}
-	if !strings.Contains(ensurer.request.Instructions, "You are an expert coding assistant") {
+	if !strings.Contains(ensurer.request.Instructions, "You are Codex, a pragmatic coding agent based on GPT-5") {
 		t.Fatalf("expected prompt instructions to be populated")
 	}
 	if ensurer.request.GPTName != "Codex/"+filepath.Base(workspace) {
