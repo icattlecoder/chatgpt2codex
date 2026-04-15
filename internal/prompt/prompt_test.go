@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildIncludesToolsAndGuidelines(t *testing.T) {
@@ -37,9 +36,6 @@ func TestBuildIncludesToolsAndGuidelines(t *testing.T) {
 	}
 	if !strings.Contains(result, "do not use code fences") {
 		t.Fatalf("missing no-code-fence guideline")
-	}
-	if !strings.Contains(result, "Current date: "+time.Now().Format("2006-01-02")) {
-		t.Fatalf("missing current date")
 	}
 	if !strings.Contains(result, "Current working directory: "+filepath.ToSlash(cwd)) {
 		t.Fatalf("missing cwd")

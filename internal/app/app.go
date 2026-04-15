@@ -16,7 +16,6 @@ import (
 
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
 	"github.com/icattlecoder/chatgpt2codex/internal/config"
-	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
 	"github.com/icattlecoder/chatgpt2codex/internal/gpt"
 	"github.com/icattlecoder/chatgpt2codex/internal/prompt"
 	"github.com/icattlecoder/chatgpt2codex/internal/proxy"
@@ -27,6 +26,8 @@ import (
 var startProxy = func(ctx context.Context, kind, localURL string) (*proxy.Session, error) {
 	return proxy.Start(ctx, kind, localURL)
 }
+
+var generateAPIKey = server.GenerateAPIKey
 
 type gptEnsurer interface {
 	Ensure(context.Context, gpt.CreateRequest) (gpt.EnsureResult, error)
@@ -45,7 +46,7 @@ var newGPTEnsurer = func(store gpt.Store) (gptEnsurer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return gpt.NewManager(store, creator, nil), nil
+	return gpt.NewManager(store, creator, creator), nil
 }
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -63,93 +64,22 @@ func NewRootCommand(stdout, stderr io.Writer) (*cobra.Command, error) {
 		return nil, err
 	}
 
+	var model string
 	rootCmd := &cobra.Command{
 		Use:           "chatgpt2codex",
 		Short:         "Expose local tool APIs for code assistants",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
+			return runServe(cmd.Context(), defaultWorkspace, model, stdout)
 		},
 	}
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)
-
-	rootCmd.AddCommand(
-		newServeCommand(defaultWorkspace, stdout),
-		newToolsCommand(stdout),
-		newPromptCommand(defaultWorkspace, stdout),
-	)
+	rootCmd.Flags().StringVar(&model, "model", gpt.DefaultRecommendedModel, "recommended GPT model")
 
 	return rootCmd, nil
-}
-
-func newServeCommand(defaultWorkspace string, stdout io.Writer) *cobra.Command {
-	var workspace string
-	var legacyWorkspace string
-	var model string
-	var legacyProxy string
-
-	cmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Start the tool API server",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			resolvedWorkspace := workspace
-			if !cmd.Flags().Changed("workspace") && cmd.Flags().Changed("worksapce") {
-				resolvedWorkspace = legacyWorkspace
-			}
-			return runServe(cmd.Context(), resolvedWorkspace, model, stdout)
-		},
-	}
-
-	cmd.Flags().StringVar(&workspace, "workspace", defaultWorkspace, "default workspace")
-	cmd.Flags().StringVar(&legacyWorkspace, "worksapce", "", "deprecated alias for --workspace")
-	cmd.Flags().StringVar(&model, "model", gpt.DefaultRecommendedModel, "recommended GPT model")
-	cmd.Flags().StringVar(&legacyProxy, "proxy", "", "deprecated proxy provider flag; cloudflare is always enabled")
-	_ = cmd.Flags().MarkDeprecated("worksapce", "use --workspace instead")
-	_ = cmd.Flags().MarkHidden("worksapce")
-	_ = cmd.Flags().MarkDeprecated("proxy", "cloudflare is always enabled")
-	_ = cmd.Flags().MarkHidden("proxy")
-
-	return cmd
-}
-
-func newToolsCommand(stdout io.Writer) *cobra.Command {
-	return &cobra.Command{
-		Use:   "tools",
-		Short: "Print embedded tools API spec",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := io.WriteString(stdout, docsasset.ToolsAPISpec)
-			return err
-		},
-	}
-}
-
-func newPromptCommand(defaultWorkspace string, stdout io.Writer) *cobra.Command {
-	var workspace string
-	var legacyWorkspace string
-
-	cmd := &cobra.Command{
-		Use:   "prompt",
-		Short: "Print the system prompt",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			resolvedWorkspace := workspace
-			if !cmd.Flags().Changed("workspace") && cmd.Flags().Changed("worksapce") {
-				resolvedWorkspace = legacyWorkspace
-			}
-			return runPrompt(resolvedWorkspace, stdout)
-		},
-	}
-
-	cmd.Flags().StringVar(&workspace, "workspace", defaultWorkspace, "working directory")
-	cmd.Flags().StringVar(&legacyWorkspace, "worksapce", "", "deprecated alias for --workspace")
-	_ = cmd.Flags().MarkDeprecated("worksapce", "use --workspace instead")
-	_ = cmd.Flags().MarkHidden("worksapce")
-
-	return cmd
 }
 
 func runServe(ctx context.Context, workspace, model string, stdout io.Writer) error {
@@ -162,16 +92,17 @@ func runServe(ctx context.Context, workspace, model string, stdout io.Writer) er
 	if err != nil {
 		return err
 	}
+	apiKey, err := generateAPIKey()
+	if err != nil {
+		return err
+	}
 	var publicBaseURL atomic.Value
 	publicBaseURL.Store("")
 
 	handler := server.NewHandler(server.Config{
 		DefaultWorkspace: resolvedWorkspace,
 		AuditLogger:      logger,
-		PublicBaseURL: func() string {
-			value, _ := publicBaseURL.Load().(string)
-			return value
-		},
+		APIKey:           apiKey,
 	})
 
 	listener, err := server.ListenFirstAvailable(tool.DefaultStartPort)
@@ -201,7 +132,7 @@ func runServe(ctx context.Context, workspace, model string, stdout io.Writer) er
 		return err
 	}
 	publicBaseURL.Store(proxySession.PublicURL)
-	if _, err := fmt.Fprintf(stdout, "Public URL: %s\n%s\n", proxySession.PublicURL, strings.TrimRight(proxySession.PublicURL, "/")+"/api.yaml"); err != nil {
+	if _, err := fmt.Fprintf(stdout, "Public URL: %s\nAPI Key: %s\n", proxySession.PublicURL, apiKey); err != nil {
 		return err
 	}
 	defer func() {
@@ -221,12 +152,14 @@ func runServe(ctx context.Context, workspace, model string, stdout io.Writer) er
 		return err
 	}
 
+	publicURL, _ := publicBaseURL.Load().(string)
 	ensureResult, err := ensurer.Ensure(runContext, gpt.CreateRequest{
 		Workspace:        resolvedWorkspace,
 		GPTName:          gpt.GPTNameForWorkspace(resolvedWorkspace),
 		Instructions:     prompt.Build(resolvedWorkspace),
-		OpenAPISchema:    server.BuildAPISpec(proxySession.PublicURL),
+		OpenAPISchema:    server.BuildAPISpec(publicURL),
 		RecommendedModel: firstNonEmpty(strings.TrimSpace(model), gpt.DefaultRecommendedModel),
+		ActionAPIKey:     apiKey,
 		ProgressWriter:   stdout,
 	})
 	if err != nil {
@@ -255,11 +188,6 @@ func runServe(ctx context.Context, workspace, model string, stdout io.Writer) er
 	case <-runContext.Done():
 		return httpServer.Shutdown(context.Background())
 	}
-}
-
-func runPrompt(workspace string, stdout io.Writer) error {
-	_, err := io.WriteString(stdout, prompt.Build(workspace))
-	return err
 }
 
 func resolveServeWorkspace(workspace string) (string, error) {

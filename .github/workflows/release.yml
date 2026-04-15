@@ -7,13 +7,10 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -24,43 +21,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.14.0
-          registry-url: https://registry.npmjs.org
-
-      - name: Upgrade npm for trusted publishing
-        run: npm install --global npm@^11.5.1
-
       - name: Run tests
         run: go test ./...
 
-      - name: Build release binaries
+      - name: Build release archives
         run: bash scripts/build-release.sh
-
-      - name: Set npm package version from tag
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: npm version --no-git-tag-version "${TAG_NAME#v}"
-
-      - name: Validate npm package contents
-        run: npm pack --dry-run
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/chatgpt2codex-*
-            dist/SHA256SUMS
+            dist/chatgpt2codex_*.tar.gz
+            dist/chatgpt2codex_*.zip
+            dist/chatgpt2codex_checksums.txt
           generate_release_notes: true
-
-      - name: Publish package to npm with trusted publishing
-        if: ${{ env.NPM_TOKEN == '' }}
-        run: npm publish --access public
-
-      - name: Publish package to npm with bootstrap token
-        if: ${{ env.NPM_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
-        run: npm publish --provenance --access public

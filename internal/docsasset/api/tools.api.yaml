@@ -5,6 +5,8 @@ info:
   description: Local tool service for chatgpt2codex.
 servers:
   - url: http://127.0.0.1:8080
+security:
+  - bearerAuth: []
 paths:
   /tools/read:
     post:
@@ -19,6 +21,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -36,6 +40,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -53,6 +59,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -70,6 +78,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -87,6 +97,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -104,6 +116,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -121,6 +135,8 @@ paths:
       responses:
         '200':
           description: Tool response
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
@@ -142,19 +158,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RuntimeContextResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           description: Invalid request
         '500':
           description: Tool execution failed
 components:
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer API key.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
   parameters:
-    XWorkspace:
-      name: X-Workspace
-      in: header
-      required: false
-      schema:
-        type: string
-      description: Override the default workspace for this request.
     XConversationId:
       name: Openai-Conversation-Id
       in: header

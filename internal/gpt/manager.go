@@ -40,6 +40,7 @@ type CreateRequest struct {
 	Instructions     string
 	OpenAPISchema    string
 	RecommendedModel string
+	ActionAPIKey     string
 	ProgressWriter   io.Writer
 }
 
@@ -55,6 +56,7 @@ type UpdateRequest struct {
 	Instructions     string
 	OpenAPISchema    string
 	RecommendedModel string
+	ActionAPIKey     string
 	ProgressWriter   io.Writer
 }
 
@@ -104,6 +106,7 @@ func (m *Manager) Ensure(ctx context.Context, request CreateRequest) (EnsureResu
 			Instructions:     request.Instructions,
 			OpenAPISchema:    request.OpenAPISchema,
 			RecommendedModel: request.RecommendedModel,
+			ActionAPIKey:     request.ActionAPIKey,
 			ProgressWriter:   request.ProgressWriter,
 		})
 		if updateErr != nil {

@@ -16,7 +16,7 @@
 ## 修改约定
 - 新增或调整工具时，同时检查 `internal/tool/definitions.go`、`internal/server/server.go`、`internal/docsasset/api/tools.api.yaml` 与相关测试。
 - 调整提示词、仓库说明或技能发现逻辑时，同时检查 `internal/prompt/` 与 `internal/runtimecontext/`。
-- 提交前至少运行 `go test ./...`；涉及 npm 分发或发版链路时，再执行 `npm pack --dry-run`。
+- 提交前至少运行 `go test ./...`；涉及发版链路时，再执行 `make release` 检查 GitHub Release 产物。
 
 ## 文档索引
 - `README.md`：安装、使用方式、发布流程。
@@ -24,7 +24,7 @@
 - `docs/requirements/01-cli-and-service.md`：CLI 命令、HTTP 服务与 API 暴露。
 - `docs/requirements/02-tool-capabilities.md`：文件、搜索、命令执行类工具能力。
 - `docs/requirements/03-context-audit-and-proxy.md`：运行时上下文、审计日志、代理能力。
-- `docs/requirements/04-distribution-and-release.md`：构建、npm 分发与发布要求。
+- `docs/requirements/04-distribution-and-release.md`：构建、GitHub Release 分发与发布要求。
 - `internal/docsasset/api/tools.api.yaml`：内嵌 OpenAPI 规范源文件。
 
 ## 工作规范

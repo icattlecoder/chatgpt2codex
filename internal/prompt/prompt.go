@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/icattlecoder/chatgpt2codex/internal/tool"
 )
@@ -43,11 +42,9 @@ In addition to the tools above, you may have access to other custom tools depend
 Guidelines:
 %s
 
-Current date: %s
 Current working directory: %s`,
 		strings.Join(visibleTools, "\n"),
 		formatGuidelines(guidelines),
-		time.Now().Format("2006-01-02"),
 		filepath.ToSlash(cwd),
 	)
 }

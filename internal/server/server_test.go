@@ -14,10 +14,13 @@ import (
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
 )
 
-func TestHandlerUsesWorkspaceHeaderAndWritesAuditLog(t *testing.T) {
+func TestHandlerUsesConfiguredWorkspaceAndWritesAuditLog(t *testing.T) {
 	defaultWorkspace := t.TempDir()
 	overrideWorkspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(overrideWorkspace, "note.txt"), []byte("hello\nworld"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(defaultWorkspace, "note.txt"), []byte("default\nworkspace"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overrideWorkspace, "note.txt"), []byte("override\nworkspace"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
@@ -27,9 +30,10 @@ func TestHandlerUsesWorkspaceHeaderAndWritesAuditLog(t *testing.T) {
 		t.Fatalf("NewLogger returned error: %v", err)
 	}
 
-	handler := NewHandler(Config{DefaultWorkspace: defaultWorkspace, AuditLogger: logger})
+	handler := NewHandler(Config{DefaultWorkspace: defaultWorkspace, AuditLogger: logger, APIKey: "ctc_secret"})
 	request := httptest.NewRequest(http.MethodPost, "/tools/read", strings.NewReader(`{"path":"note.txt"}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer ctc_secret")
 	request.Header.Set("X-Workspace", overrideWorkspace)
 	request.Header.Set("Openai-Conversation-Id", "conv-1")
 	recorder := httptest.NewRecorder()
@@ -38,8 +42,11 @@ func TestHandlerUsesWorkspaceHeaderAndWritesAuditLog(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), "hello") {
-		t.Fatalf("expected read response to include file contents")
+	if !strings.Contains(recorder.Body.String(), "default") {
+		t.Fatalf("expected read response to use configured workspace, got %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "override") {
+		t.Fatalf("did not expect X-Workspace override to be honored, got %q", recorder.Body.String())
 	}
 
 	logPath := filepath.Join(logDir, time.Now().Format("2006"), time.Now().Format("01"), time.Now().Format("02"), "conv-1.jsonl")
@@ -51,14 +58,20 @@ func TestHandlerUsesWorkspaceHeaderAndWritesAuditLog(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 log line, got %d", len(lines))
 	}
+	if strings.Contains(string(data), "ctc_secret") {
+		t.Fatalf("expected authorization header to be redacted from audit log, got %q", string(data))
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("expected redacted authorization marker in audit log, got %q", string(data))
+	}
 	var record struct {
 		Workspace string `json:"workspace"`
 	}
 	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
 		t.Fatalf("invalid log record: %v", err)
 	}
-	if record.Workspace != overrideWorkspace {
-		t.Fatalf("expected workspace %q, got %q", overrideWorkspace, record.Workspace)
+	if record.Workspace != defaultWorkspace {
+		t.Fatalf("expected workspace %q, got %q", defaultWorkspace, record.Workspace)
 	}
 }
 
@@ -137,26 +150,8 @@ func TestRuntimeContextHandlerReturnsPlainJSONAndWritesAuditLog(t *testing.T) {
 	}
 }
 
-func TestAPISpecHandlerUsesConfiguredPublicURL(t *testing.T) {
-	handler := NewHandler(Config{
-		DefaultWorkspace: t.TempDir(),
-		PublicBaseURL: func() string {
-			return "https://demo.trycloudflare.com"
-		},
-	})
-
-	request := httptest.NewRequest(http.MethodGet, "/api.yaml", nil)
-	request.Host = "127.0.0.1:8080"
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
-	}
-	if got := recorder.Header().Get("Content-Type"); got != "application/yaml; charset=utf-8" {
-		t.Fatalf("unexpected content type %q", got)
-	}
-	body := recorder.Body.String()
+func TestBuildAPISpecUsesConfiguredPublicURL(t *testing.T) {
+	body := BuildAPISpec("https://demo.trycloudflare.com")
 	if !strings.Contains(body, "https://demo.trycloudflare.com") {
 		t.Fatalf("expected api spec to include public URL, got %q", body)
 	}
@@ -165,21 +160,41 @@ func TestAPISpecHandlerUsesConfiguredPublicURL(t *testing.T) {
 	}
 }
 
-func TestAPISpecHandlerFallsBackToForwardedHeaders(t *testing.T) {
-	handler := NewHandler(Config{DefaultWorkspace: t.TempDir()})
+func TestBuildAPISpecFallsBackToEmbeddedSpecWhenEmpty(t *testing.T) {
+	body := BuildAPISpec("")
+	if !strings.Contains(body, "http://127.0.0.1:8080") {
+		t.Fatalf("expected embedded local URL, got %q", body)
+	}
+}
 
-	request := httptest.NewRequest(http.MethodGet, "/api.yaml", nil)
-	request.Header.Set("X-Forwarded-Proto", "https")
-	request.Header.Set("X-Forwarded-Host", "public.example.com")
+func TestHandlerRejectsMissingAPIKey(t *testing.T) {
+	handler := NewHandler(Config{DefaultWorkspace: t.TempDir(), APIKey: "ctc_secret"})
+	request := httptest.NewRequest(http.MethodPost, "/tools/ls", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, recorder.Code, recorder.Body.String())
 	}
-	body := recorder.Body.String()
-	if !strings.Contains(body, "https://public.example.com") {
-		t.Fatalf("expected api spec to include forwarded public URL, got %q", body)
+	if got := recorder.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
+		t.Fatalf("expected bearer challenge header, got %q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "missing or invalid bearer api key") {
+		t.Fatalf("expected unauthorized body, got %q", recorder.Body.String())
+	}
+}
+
+func TestAPISpecIncludesBearerSecurityScheme(t *testing.T) {
+	body := BuildAPISpec("")
+	if !strings.Contains(body, "bearerAuth") {
+		t.Fatalf("expected api spec to include bearer auth scheme, got %q", body)
+	}
+	if !strings.Contains(body, "scheme: bearer") {
+		t.Fatalf("expected api spec to declare bearer scheme, got %q", body)
+	}
+	if !strings.Contains(body, "'401':") {
+		t.Fatalf("expected api spec to include 401 responses, got %q", body)
 	}
 }
 

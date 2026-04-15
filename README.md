@@ -2,27 +2,45 @@
 
 `chatgpt2codex` 是一个本地 Go CLI，用来把一组面向代码助手的工具能力暴露给外部调用方。
 
-当前仓库已经补齐了两条发布链路：
-
-- Go 源码可以直接本地构建运行。
-- npm 包 `chatgpt2codex` 负责分发 CLI，安装时会自动下载当前平台对应的预编译二进制。
+当前仓库通过 GitHub Release 直接分发预编译 CLI，不再发布 npm 包。
 
 ## 安装
 
-### 通过 npm 安装
+### macOS / Linux 一键安装
+
+默认安装到 `~/.local/bin`：
 
 ```bash
-npm install -g chatgpt2codex
+curl -fsSL https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/install.sh | sh
 ```
 
-支持的平台：
+安装到自定义目录：
 
-- macOS `x64`
-- macOS `arm64`
-- Linux `x64`
-- Linux `arm64`
-- Windows `x64`
-- Windows `arm64`
+```bash
+curl -fsSL https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/install.sh | sh -s -- -b /usr/local/bin
+```
+
+安装指定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/install.sh | sh -s -- -v v0.1.0
+```
+
+### Windows PowerShell 一键安装
+
+默认安装到 `$env:LOCALAPPDATA\Programs\chatgpt2codex\bin`：
+
+```powershell
+irm https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/install.ps1 | iex
+```
+
+安装指定版本或目录：
+
+```powershell
+$env:CHATGPT2CODEX_VERSION = 'v0.1.0'
+$env:CHATGPT2CODEX_INSTALL_DIR = 'C:\Tools\chatgpt2codex\bin'
+irm https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/install.ps1 | iex
+```
 
 ### 通过 Go 安装
 
@@ -30,12 +48,29 @@ npm install -g chatgpt2codex
 go install github.com/icattlecoder/chatgpt2codex/cmd/chatgpt2codex@latest
 ```
 
+### 手动下载安装
+
+GitHub Release 提供以下平台的归档包与校验文件：
+
+- macOS `amd64`
+- macOS `arm64`
+- Linux `amd64`
+- Linux `arm64`
+- Windows `amd64`
+- Windows `arm64`
+
+发布产物包含：
+
+- 平台归档包（macOS / Linux 为 `.tar.gz`，Windows 为 `.zip`）
+- `chatgpt2codex_checksums.txt`
+
 ## 本地开发
 
 ```bash
 make build
-make run ARGS='tools'
+make run
 make test
+make release
 make install
 ```
 
@@ -46,40 +81,25 @@ go test ./...
 go build ./cmd/chatgpt2codex
 ```
 
-如果要验证 npm 包装层：
-
-```bash
-make package
-node scripts/install.js
-npm pack --dry-run
-```
-
 查看全部 Makefile 命令：
 
 ```bash
 make help
 ```
 
-开发版本的 `package.json` 使用占位版本号，`postinstall` 会自动跳过二进制下载；真正发布时由 GitHub Actions 按 tag 覆盖为正式版本。
-
 ## 使用方式
 
 ```bash
-chatgpt2codex serve --workspace /path/to/project
-chatgpt2codex serve --workspace /path/to/project --model "GPT-5.4 Thinking"
-chatgpt2codex tools
-chatgpt2codex prompt
+cd /path/to/project
+chatgpt2codex
+chatgpt2codex --model "GPT-5.4 Thinking"
 ```
 
-主要命令：
+程序启动时会直接以当前工作目录作为唯一工作区，启动本地 HTTP 服务，默认建立 cloudflare 公网地址，为本次进程随机生成 API Key，并按当前工作区自动创建或更新 chatgpt.com 上的 GPT。
 
-- `serve`：启动本地 HTTP 服务，默认建立 cloudflare 公网地址，并按工作区自动创建或接管 chatgpt.com 上的 GPT。
-- `tools`：输出内嵌的工具 API 规范（源文件位于 `internal/docsasset/api/tools.api.yaml`）。
-- `prompt`：输出系统提示词内容。
+程序默认启用内嵌的 cloudflare Quick Tunnel，用户不需要额外安装 `cloudflared`，也不再需要手工传 `--proxy` 或 `--workspace`。
 
-`serve` 命令默认启用内嵌的 cloudflare Quick Tunnel，用户不需要额外安装 `cloudflared`，也不再需要手工传 `--proxy`。
-
-首次执行 `serve` 时，程序会读取 `~/.chatgpt2codex/config.json`。如果当前工作区没有 GPT 记录，则会启动可见的 Chrome 浏览器，打开 `https://chatgpt.com/gpts/editor`，自动填写 GPT 名称、提示词、推荐模型和 Action 的 OpenAPI 架构，并在成功后把 `gpt_id` 写回配置文件。
+执行 `chatgpt2codex` 时，程序会读取 `~/.chatgpt2codex/config.json`。如果当前工作区没有 GPT 记录，则会启动可见的 Chrome 浏览器，打开 `https://chatgpt.com/gpts/editor`，自动填写 GPT 名称、提示词、推荐模型、Action 的 OpenAPI 架构，并把 Action 身份验证设置为 Bearer API Key；如果已有 GPT 记录，则会自动更新这些配置。成功后会把 `gpt_id` 写回或复用配置文件中的记录。
 
 ## GitHub Actions
 
@@ -89,46 +109,31 @@ chatgpt2codex prompt
   - 在普通 `push` 和 `pull_request` 上执行
   - 运行 `go test ./...`
   - 构建 CLI
-  - 校验 npm 包装脚本语法
-  - 执行 `npm pack --dry-run`
+  - 校验安装脚本语法
+  - 构建 GitHub Release 归档并检查产物是否齐全
 - `.github/workflows/release.yml`
   - 在推送 `v*` 标签时执行
-  - 交叉编译六个平台的 CLI 二进制
-  - 生成 GitHub Release 并上传二进制与 `SHA256SUMS`
-  - 使用 GitHub Actions OIDC trusted publishing 发布 npm 包
+  - 运行 `go test ./...`
+  - 交叉编译六个平台的 CLI 二进制并打包归档
+  - 生成 GitHub Release 并上传归档与 `chatgpt2codex_checksums.txt`
 
 ## 发布流程
 
-1. 如果 npm 上还没有 `chatgpt2codex` 这个包，先做一次首发引导：
-   - 创建一个 npm Granular Access Token，并为该包开启 publish 权限
-   - 勾选 bypass 2FA（否则 GitHub Actions 仍会被 403 拒绝）
-   - 把它保存到 GitHub Actions Secret：`NPM_TOKEN`
-   - 推一个正式版本 tag，先把包发布到 npm
-2. 包创建出来后，在 npm 包 `chatgpt2codex` 的 Trusted publishing 设置里添加 GitHub Actions publisher：
-   - Owner: `icattlecoder`
-   - Repository: `chatgpt2codex`
-   - Workflow file: `release.yml`
-3. 完成 trusted publishing 一次性配置后，可以删除 GitHub Secret `NPM_TOKEN`。
-4. 之后继续推送语义化版本标签，例如：
+推送语义化版本标签，例如：
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-发布 workflow 会自动把 tag `v0.1.0` 转成 npm 版本 `0.1.0`，上传对应平台的二进制到 GitHub Release，然后再发布 npm 包。
+发布 workflow 会自动执行测试、构建以下 Release 产物并创建 GitHub Release：
 
-如果你更喜欢命令行，也可以由 npm 包 owner/admin 在本地登录 npm 后执行：
+- `chatgpt2codex_darwin_amd64.tar.gz`
+- `chatgpt2codex_darwin_arm64.tar.gz`
+- `chatgpt2codex_linux_amd64.tar.gz`
+- `chatgpt2codex_linux_arm64.tar.gz`
+- `chatgpt2codex_windows_amd64.zip`
+- `chatgpt2codex_windows_arm64.zip`
+- `chatgpt2codex_checksums.txt`
 
-```bash
-npm trust github chatgpt2codex --repo=icattlecoder/chatgpt2codex --file=release.yml
-```
-
-trusted publishing 配置需要 npm 包的 owner/admin 权限；首次配置完成后，GitHub-hosted runner 会通过 OIDC 直接换取发布身份，并自动生成 provenance。
-
-当前 workflow 兼容两种模式：
-
-- 默认优先走 trusted publishing（不需要 `NPM_TOKEN`）
-- 如果仓库里仍存在 `NPM_TOKEN`，则自动回退到 token 发布，便于完成首次发布引导
-
-安装 npm 包时，`postinstall` 会从对应版本的 GitHub Release 下载二进制文件。
+最终用户可以直接通过安装脚本一键安装最新版本，或通过 `-v vX.Y.Z` / `CHATGPT2CODEX_VERSION` 安装指定版本。

@@ -22,26 +22,26 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - name: Run Go tests
         run: go test ./...
 
       - name: Build CLI
         run: go build -trimpath -o /tmp/chatgpt2codex ./cmd/chatgpt2codex
 
-      - name: Check npm wrapper scripts
+      - name: Validate installer scripts
         run: |
-          node --check bin/chatgpt2codex.js
-          node --check scripts/platform.js
-          node --check scripts/install.js
-          node --check scripts/prepublish.js
+          bash -n install.sh
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoLogo -NoProfile -Command '$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile("install.ps1", [ref]$null, [ref]$errors) | Out-Null; if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }'
+          fi
 
-      - name: Smoke test installer in development mode
-        run: node scripts/install.js
-
-      - name: Validate npm package contents
-        run: npm pack --dry-run
+      - name: Build release archives
+        run: |
+          bash scripts/build-release.sh /tmp/chatgpt2codex-dist
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_linux_amd64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_linux_arm64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_darwin_amd64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_darwin_arm64.tar.gz
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_windows_amd64.zip
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_windows_arm64.zip
+          test -f /tmp/chatgpt2codex-dist/chatgpt2codex_checksums.txt

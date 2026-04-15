@@ -102,4 +102,6 @@ replace github.com/prometheus/golang_client => github.com/prometheus/golang_clie
 
 replace gopkg.in/yaml.v3 => gopkg.in/yaml.v3 v3.0.1
 
-replace github.com/quic-go/quic-go => github.com/chungthuang/quic-go v0.45.1-0.20250128102735-2687bd175910
+replace nhooyr.io/websocket => github.com/coder/websocket v1.8.7
+
+replace github.com/quic-go/quic-go => github.com/chungthuang/quic-go v0.45.1
