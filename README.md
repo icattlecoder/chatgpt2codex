@@ -26,6 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/icattlecoder/chatgpt2codex/main/ins
 
 1. Start the CLI inside your project directory:
 
+1. 在你的项目空间中执行：
 ```bash
 cd /path/to/project
 chatgpt2codex
