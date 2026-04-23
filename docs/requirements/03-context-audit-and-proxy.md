@@ -34,13 +34,25 @@
 
 ## 4. 默认代理能力
 - 程序启动时必须默认启动 `cloudflare` Quick Tunnel。
+- 程序必须支持 `cloudflare` 与 `ngrok` 两种代理实现，并通过 CLI 参数选择。
+- 两种代理都必须以内嵌 SDK 或源码方式在当前 CLI 进程内运行，不要求用户额外安装代理可执行文件。
+- 代理启动失败时，需要返回清晰错误信息，便于排查。
+- 服务结束或上下文取消时，需要关闭内嵌代理会话。
+
+### 4.1 cloudflare
 - `cloudflare` 通过直接引用 `cloudflared` 源码，在当前 CLI 进程内启动 Quick Tunnel，不要求用户额外安装 `cloudflared`。
 - 启动阶段需要先向 TryCloudflare 服务申请临时公网地址，再以内嵌 cloudflare 隧道逻辑建立连接。
 - 服务需要在启动日志中提取最近输出片段，便于排查失败原因。
 - `cloudflare` 需要等待“隧道已就绪”信号后才算启动成功。
 - 若 20 秒内未拿到公网地址，应判定启动失败。
-- 代理启动失败时，需要返回最近输出片段，方便排查。
-- 服务结束或上下文取消时，需要关闭内嵌隧道会话。
+- `cloudflare` 启动失败时，需要返回最近输出片段，方便排查。
+
+### 4.2 ngrok
+- `ngrok` 通过 `golang.ngrok.com/ngrok/v2` 在当前 CLI 进程内建立公网 HTTP Endpoint。
+- `ngrok` 不依赖外部 `ngrok` 可执行文件。
+- `ngrok` 必须从环境变量 `NGROK_AUTHTOKEN` 读取认证令牌。
+- 若未提供 `NGROK_AUTHTOKEN`，程序必须直接返回明确错误，不再继续后续 GPT 创建或更新流程。
+- `ngrok` 启动成功后，需要返回 SDK 分配的公网地址。
 
 ## 5. OpenAPI 架构联动
 - 一旦代理成功，程序输出中应包含公网访问地址。

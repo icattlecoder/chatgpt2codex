@@ -34,3 +34,9 @@ chatgpt2codex
 2. On first launch, sign in to your ChatGPT account when prompted.
 3. The program automatically creates an available GPT.
 4. Open that GPT in ChatGPT and start assigning tasks directly.
+
+To use ngrok instead of the default Cloudflare tunnel, provide an auth token and select the proxy:
+
+```bash
+NGROK_AUTHTOKEN=your_token chatgpt2codex --proxy ngrok
+```

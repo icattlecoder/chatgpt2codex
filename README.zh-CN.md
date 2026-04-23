@@ -34,3 +34,9 @@ chatgpt2codex
 2. 首次启动时，按提示登录 ChatGPT 账号。
 3. 程序会自动创建可用的 GPT。
 4. 在 ChatGPT 中打开该 GPT 并直接发起任务。
+
+如需改用 ngrok 而不是默认的 Cloudflare 隧道，先提供认证令牌，再指定代理类型：
+
+```bash
+NGROK_AUTHTOKEN=your_token chatgpt2codex --proxy ngrok
+```

@@ -65,6 +65,7 @@ func NewRootCommand(stdout, stderr io.Writer) (*cobra.Command, error) {
 	}
 
 	var model string
+	var proxyKind string
 	rootCmd := &cobra.Command{
 		Use:           "chatgpt2codex",
 		Short:         "Expose local tool APIs for code assistants",
@@ -72,17 +73,18 @@ func NewRootCommand(stdout, stderr io.Writer) (*cobra.Command, error) {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServe(cmd.Context(), defaultWorkspace, model, stdout)
+			return runServe(cmd.Context(), defaultWorkspace, model, proxyKind, stdout)
 		},
 	}
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)
 	rootCmd.Flags().StringVar(&model, "model", gpt.DefaultRecommendedModel, "recommended GPT model")
+	rootCmd.Flags().StringVar(&proxyKind, "proxy", "cloudflare", "public proxy backend (cloudflare|ngrok)")
 
 	return rootCmd, nil
 }
 
-func runServe(ctx context.Context, workspace, model string, stdout io.Writer) error {
+func runServe(ctx context.Context, workspace, model, proxyKind string, stdout io.Writer) error {
 	resolvedWorkspace, err := resolveServeWorkspace(workspace)
 	if err != nil {
 		return err
@@ -126,7 +128,7 @@ func runServe(ctx context.Context, workspace, model string, stdout io.Writer) er
 	runContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	proxySession, err := startProxy(runContext, "cloudflare", localURL)
+	proxySession, err := startProxy(runContext, proxyKind, localURL)
 	if err != nil {
 		_ = httpServer.Shutdown(context.Background())
 		return err
