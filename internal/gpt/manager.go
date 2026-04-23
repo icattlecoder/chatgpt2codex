@@ -13,7 +13,7 @@ import (
 
 var ErrUpdateNotImplemented = errors.New("gpt update is not implemented")
 
-const DefaultRecommendedModel = "GPT-5.4 Thinking"
+const DefaultRecommendedModel = "GPT-5.5 Thinking"
 
 type Store interface {
 	Load() (config.File, error)

@@ -1,7 +1,7 @@
 # 功能点：CLI 与服务接口
 
 ## 目标
-为代码助手提供一个可本地运行的统一入口，启动 HTTP 服务、建立 cloudflare 公网访问地址，并按当前运行目录自动创建或维护 chatgpt.com 上的 GPT。
+为代码助手提供一个可本地运行的统一入口，启动 HTTP 服务、建立公网访问地址，并按当前运行目录自动创建或维护 chatgpt.com 上的 GPT。
 
 ## CLI 要求
 ### 1. 根命令
@@ -9,7 +9,10 @@
 - 直接执行 `chatgpt2codex` 即启动服务，不再保留 `serve`、`api`、`prompt` 等子命令。
 - 工作区固定为当前进程工作目录，并在启动时解析为绝对路径。
 - 支持 `--model` 指定 GPT 推荐模型；默认值为 `GPT-5.4 Thinking`。
-- 启动时必须默认建立 cloudflare Quick Tunnel，不再要求调用方提供 `--proxy`。
+- 支持 `--proxy` 指定公网代理，允许值为 `cloudflare` 与 `ngrok`。
+- `--proxy` 默认值为 `cloudflare`。
+- 当 `--proxy=ngrok` 时，程序必须使用内嵌 ngrok Go SDK 建立公网地址，不依赖外部 `ngrok` 可执行文件。
+- 当 `--proxy=ngrok` 时，调用方必须通过环境变量 `NGROK_AUTHTOKEN` 提供 ngrok 认证令牌。
 - 启动后输出本地监听地址、公网地址与本次启动随机生成的 API Key。
 - API Key 每次进程启动时重新生成，只在当前进程生命周期内有效。
 - 在服务与公网地址准备完成后，读取 `~/.chatgpt2codex/config.json` 并按当前工作区执行 GPT 创建或更新流程，同时把本次启动的 API Key 同步到 GPT Action 的身份验证配置中。
@@ -46,7 +49,7 @@
 ## OpenAPI 架构要求
 - OpenAPI 规范源文件位于 `internal/docsasset/api/tools.api.yaml`。
 - 该规范不再通过 CLI 子命令或 HTTP 路由直接对外暴露。
-- 代理成功后，规范中的 `servers.url` 必须替换为 cloudflare 公网地址，再提供给 GPT Action 配置流程。
+- 代理成功后，规范中的 `servers.url` 必须替换为当前代理返回的公网地址，再提供给 GPT Action 配置流程。
 - 规范中必须声明 Bearer 鉴权，供 GPT Action 导入后与运行时接口要求保持一致。
 - 当无法推断外部地址时，保留默认本地地址。
 

@@ -161,7 +161,7 @@ func TestRunServeStartsCloudflareAndPrintsPublicURL(t *testing.T) {
 
 	var stdout bytes.Buffer
 	workspace := t.TempDir()
-	if err := runServe(ctx, workspace, gpt.DefaultRecommendedModel, &stdout); err != nil {
+	if err := runServe(ctx, workspace, gpt.DefaultRecommendedModel, "cloudflare", &stdout); err != nil {
 		t.Fatalf("runServe returned error: %v", err)
 	}
 
@@ -226,11 +226,51 @@ func TestRunServePrintsUpdateSkippedMessage(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runServe(ctx, t.TempDir(), gpt.DefaultRecommendedModel, &stdout); err != nil {
+	if err := runServe(ctx, t.TempDir(), gpt.DefaultRecommendedModel, "cloudflare", &stdout); err != nil {
 		t.Fatalf("runServe returned error: %v", err)
 	}
 
 	if !strings.Contains(stdout.String(), "GPT update skipped (not implemented): g-existing\n") {
 		t.Fatalf("expected update skipped message, got %q", stdout.String())
+	}
+}
+
+func TestRunServeUsesSelectedProxy(t *testing.T) {
+	originalStartProxy := startProxy
+	originalGenerateAPIKey := generateAPIKey
+	originalNewConfigStore := newConfigStore
+	originalNewGPTEnsurer := newGPTEnsurer
+	t.Cleanup(func() {
+		startProxy = originalStartProxy
+		generateAPIKey = originalGenerateAPIKey
+		newConfigStore = originalNewConfigStore
+		newGPTEnsurer = originalNewGPTEnsurer
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startProxy = func(ctx context.Context, kind, localURL string) (*proxy.Session, error) {
+		if kind != "ngrok" {
+			t.Fatalf("unexpected proxy kind: %s", kind)
+		}
+		cancel()
+		return &proxy.Session{PublicURL: "https://demo.ngrok.app"}, nil
+	}
+	generateAPIKey = func() (string, error) {
+		return "ctc_ngrok_key", nil
+	}
+	newConfigStore = func() (gpt.Store, error) {
+		return stubGPTStore{}, nil
+	}
+	newGPTEnsurer = func(store gpt.Store) (gptEnsurer, error) {
+		return &stubGPTEnsurer{result: gpt.EnsureResult{Created: true, GPTID: "g-ngrok"}}, nil
+	}
+
+	var stdout bytes.Buffer
+	if err := Run(ctx, []string{"--proxy", "ngrok"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Public URL: https://demo.ngrok.app\n") {
+		t.Fatalf("expected ngrok public url in output, got %q", stdout.String())
 	}
 }

@@ -12,11 +12,11 @@ import (
 func TestStartRejectsUnsupportedProxy(t *testing.T) {
 	t.Parallel()
 
-	_, err := Start(context.Background(), "ngrok", "http://127.0.0.1:8080")
+	_, err := Start(context.Background(), "unsupported", "http://127.0.0.1:8080")
 	if err == nil {
-		t.Fatal("expected Start to reject ngrok")
+		t.Fatal("expected Start to reject unsupported proxy")
 	}
-	if !strings.Contains(err.Error(), `unsupported proxy "ngrok"`) {
+	if !strings.Contains(err.Error(), `unsupported proxy "unsupported"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -45,6 +45,45 @@ func TestStartUsesEmbeddedCloudflareTunnel(t *testing.T) {
 	}
 	if session.PublicURL != "https://demo.trycloudflare.com" {
 		t.Fatalf("unexpected public url %q", session.PublicURL)
+	}
+}
+
+func TestStartUsesEmbeddedNgrokTunnel(t *testing.T) {
+	original := startEmbeddedNgrokTunnel
+	t.Cleanup(func() {
+		startEmbeddedNgrokTunnel = original
+	})
+
+	called := false
+	startEmbeddedNgrokTunnel = func(_ context.Context, localURL string) (*Session, error) {
+		called = true
+		if localURL != "http://127.0.0.1:8080" {
+			t.Fatalf("unexpected local url %q", localURL)
+		}
+		return &Session{PublicURL: "https://demo.ngrok.app"}, nil
+	}
+
+	session, err := Start(context.Background(), "ngrok", "http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected embedded ngrok starter to be called")
+	}
+	if session.PublicURL != "https://demo.ngrok.app" {
+		t.Fatalf("unexpected public url %q", session.PublicURL)
+	}
+}
+
+func TestRunEmbeddedNgrokTunnelRequiresAuthtoken(t *testing.T) {
+	t.Setenv(ngrokAuthtokenEnv, "")
+
+	_, err := runEmbeddedNgrokTunnel(context.Background(), "http://127.0.0.1:8080")
+	if err == nil {
+		t.Fatal("expected missing authtoken error")
+	}
+	if !strings.Contains(err.Error(), "NGROK_AUTHTOKEN") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

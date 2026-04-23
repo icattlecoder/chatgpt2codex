@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +19,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/urfave/cli/v2"
+	"golang.ngrok.com/ngrok/v2"
 )
 
 const (
 	cloudflareSourceVersion = "2025.4.0"
+	ngrokAuthtokenEnv       = "NGROK_AUTHTOKEN"
 	startupTimeout          = 20 * time.Second
 	quickTunnelTimeout      = 15 * time.Second
 	startupLogLimit         = 10
@@ -32,6 +35,7 @@ var (
 
 	quickTunnelServiceURL         = "https://api.trycloudflare.com"
 	startEmbeddedCloudflareTunnel = runEmbeddedCloudflareTunnel
+	startEmbeddedNgrokTunnel      = runEmbeddedNgrokTunnel
 )
 
 type Session struct {
@@ -80,9 +84,69 @@ func Start(ctx context.Context, kind, localURL string) (*Session, error) {
 	switch strings.TrimSpace(kind) {
 	case "cloudflare":
 		return startEmbeddedCloudflareTunnel(ctx, localURL)
+	case "ngrok":
+		return startEmbeddedNgrokTunnel(ctx, localURL)
 	default:
 		return nil, fmt.Errorf("unsupported proxy %q", kind)
 	}
+}
+
+func runEmbeddedNgrokTunnel(ctx context.Context, localURL string) (*Session, error) {
+	authtoken := strings.TrimSpace(os.Getenv(ngrokAuthtokenEnv))
+	if authtoken == "" {
+		fmt.Println("NGROK_AUTHTOKEN is missing. Please enter your NGROK_AUTH_TOKEN:")
+		var userToken string
+		fmt.Scanln(&userToken)
+		if userToken != "" {
+			_ = os.Setenv(ngrokAuthtokenEnv, userToken)
+			authtoken = userToken
+		} else {
+			return nil, fmt.Errorf("ngrok requires %s to be set", ngrokAuthtokenEnv)
+		}
+		return nil, fmt.Errorf("ngrok requires %s to be set", ngrokAuthtokenEnv)
+	}
+
+	agent, err := ngrok.NewAgent(
+		ngrok.WithAuthtoken(authtoken),
+		ngrok.WithClientInfo("chatgpt2codex", "embedded-sdk"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize ngrok agent: %w", err)
+	}
+
+	if err := agent.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("failed to connect ngrok agent: %w", err)
+	}
+
+	forwarder, err := agent.Forward(
+		ctx,
+		ngrok.WithUpstream(localURL),
+		ngrok.WithDescription("chatgpt2codex"),
+	)
+	if err != nil {
+		_ = agent.Disconnect()
+		return nil, fmt.Errorf("failed to start embedded ngrok tunnel: %w", err)
+	}
+
+	publicURL := ""
+	if endpointURL := forwarder.URL(); endpointURL != nil {
+		publicURL = strings.TrimSpace(endpointURL.String())
+	}
+	if publicURL == "" {
+		_ = forwarder.Close()
+		_ = agent.Disconnect()
+		return nil, errors.New("ngrok tunnel did not return a public URL")
+	}
+
+	return &Session{
+		PublicURL: publicURL,
+		closeFn: func() error {
+			return errors.Join(
+				normalizeRuntimeError(forwarder.Close()),
+				normalizeRuntimeError(agent.Disconnect()),
+			)
+		},
+	}, nil
 }
 
 func runEmbeddedCloudflareTunnel(ctx context.Context, localURL string) (*Session, error) {
