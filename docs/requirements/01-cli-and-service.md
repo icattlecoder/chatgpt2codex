@@ -1,19 +1,36 @@
 # 功能点：CLI 与服务接口
 
 ## 目标
-为代码助手提供一个可本地运行的统一入口，启动 HTTP 服务、建立 cloudflare 公网访问地址，并按当前运行目录自动创建或维护 chatgpt.com 上的 GPT。
+为代码助手提供一个可本地运行的统一入口，启动 HTTP 服务，按配置选择 cloudflare Quick Tunnel 或 Named Tunnel，并按工作区决定是否同步 chatgpt.com 上的 GPT。
 
 ## CLI 要求
 ### 1. 根命令
 - 可执行文件名为 `chatgpt2codex`。
-- 直接执行 `chatgpt2codex` 即启动服务，不再保留 `serve`、`api`、`prompt` 等子命令。
+- 直接执行 `chatgpt2codex` 即启动服务。
 - 工作区固定为当前进程工作目录，并在启动时解析为绝对路径。
-- 支持 `--model` 指定 GPT 推荐模型；默认值为 `GPT-5.4 Thinking`。
-- 启动时必须默认建立 cloudflare Quick Tunnel，不再要求调用方提供 `--proxy`。
-- 启动后输出本地监听地址、公网地址与本次启动随机生成的 API Key。
-- API Key 每次进程启动时重新生成，只在当前进程生命周期内有效。
-- 在服务与公网地址准备完成后，读取 `~/.chatgpt2codex/config.json` 并按当前工作区执行 GPT 创建或更新流程，同时把本次启动的 API Key 同步到 GPT Action 的身份验证配置中。
+- 支持 `--model` 指定 GPT 推荐模型；默认值为 `GPT-5.5 Thinking`。
+- 支持 `--reset`，强制执行当前工作区 GPT 元数据同步。
 - 收到 `SIGINT` / `SIGTERM` 时应优雅关闭服务与代理。
+
+### 2. `domain` 子命令
+- `chatgpt2codex domain` 必须进入交互式配置流程。
+- `chatgpt2codex domain <domain>` 可将 `<domain>` 作为默认值带入交互式配置流程。
+- `chatgpt2codex domain -` 关闭自定义域名开关，保留已保存的 Cloudflare API Token。
+- 交互式流程至少录入以下字段：
+  - Cloudflare 基础域名 `domain`
+  - Cloudflare API Token
+- 交互式流程需要允许复用已保存值；当用户直接回车时，保留现有值。
+- 配置写入 `~/.chatgpt2codex/config.json`。
+
+### 3. 启动模式
+- `cloudflare.enableDomain` 为 `false` 时，启动必须默认建立 cloudflare Quick Tunnel。
+- `cloudflare.enableDomain` 为 `true` 时，启动必须使用该工作区的 hostname 走 cloudflare Named Tunnel。
+- 启动后输出本地监听地址、公网地址与当前工作区实际使用的 API Key。
+- 同一工作区同一时刻只允许存在一个活跃服务实例；重复启动必须直接报错，而不是并发连接同一个 tunnel。
+- 已启用自定义域名时，同一时刻只允许存在一个活跃 custom-domain 实例。
+- 临时域名模式下，API Key 每次进程启动都重新生成，只在当前进程生命周期内有效。
+- 已启用自定义域名时，优先复用工作区已持久化的 API Key；首次缺失时生成并写回配置。
+- 已启用自定义域名时，Named Tunnel 所需的 Zone ID、Account ID 与 Tunnel Token 必须通过 Cloudflare API Token 自动获取，不持久化到配置文件。
 
 ## HTTP 服务要求
 ### 1. 监听策略
@@ -34,8 +51,11 @@
 - 服务启动时解析当前进程工作目录作为唯一工作区。
 - 单次请求不得再通过额外参数或请求头覆盖工作区。
 - 服务端必须校验该工作区存在且为目录。
-- GPT 映射使用启动时解析出的绝对工作区路径。
+- 工作区配置键使用启动时解析出的绝对工作区路径。
 - GPT 名称中的 `<workspace>` 使用绝对工作区路径的目录名。
+- 工作区 hostname 默认值为 `<workspace-dns-label>.<domain>`。
+- `workspace-dns-label` 生成规则为：小写化、非 `[a-z0-9-]` 替换为 `-`、去除首尾 `-`、空值回退 `workspace`。
+- 当全局基础域名被修改时，已持久化工作区的 `host` 默认值需要重新按新域名推导。
 
 ### 4. 错误模型
 - 未提供或提供了无效 Bearer API Key 时返回 `401`。
@@ -46,8 +66,8 @@
 ## OpenAPI 架构要求
 - OpenAPI 规范源文件位于 `internal/docsasset/api/tools.api.yaml`。
 - 该规范不再通过 CLI 子命令或 HTTP 路由直接对外暴露。
-- 代理成功后，规范中的 `servers.url` 必须替换为 cloudflare 公网地址，再提供给 GPT Action 配置流程。
-- 规范中必须声明 Bearer 鉴权，供 GPT Action 导入后与运行时接口要求保持一致。
+- 代理成功后，规范中的 `servers.url` 必须替换为当前公网地址，再提供给 GPT Action 配置流程。
+- 规范中必须声明 Bearer 鉴权。
 - 当无法推断外部地址时，保留默认本地地址。
 
 ## GPT 生命周期要求
@@ -57,23 +77,31 @@
 
 ```json
 {
+  "cloudflare": {
+    "enableDomain": true,
+    "domain": "chatgpt2codex.fun",
+    "api_token": "xxx"
+  },
   "gpts": {
     "<workspace>": {
-      "gpt_id": ""
+      "gpt_id": "",
+      "host": "",
+      "api_key": ""
     }
   }
 }
 ```
 
 - `<workspace>` 键为绝对工作区路径。
-- 当配置文件不存在时，程序应按空配置处理，并在首次成功创建 GPT 后落盘。
+- 旧版仅包含 `gpt_id` 的配置文件必须保持兼容。
+- 旧版仅包含 `domain` 的配置文件必须保持兼容。
+- 旧版 `cloudflare.zone_id` 与 `cloudflare.tunnel_token` 配置必须兼容读取，但保存时不再写回。
 
-### 2. 工作区映射处理
-- 若当前工作区没有 GPT 记录，则执行 GPT 创建流程。
-- GPT 创建流程进入编辑器后，先切换到“配置”页，再填写名称、指令、模型、Action 架构与 Action 身份验证。
-- Action 身份验证必须配置为 API 密钥，并把身份验证类型设置为 Bearer，密钥值使用当前进程启动时随机生成的 API Key。
-- GPT 保存成功后，应优先从成功提示中展示的 GPT 链接元素提取地址；该地址可能包含 `https://chatgpt.com/g/g-<gpt_id>-<slug>`，程序只保留其中的 `g-<gpt_id>` 作为持久化标识。
-- GPT 创建成功后，使用系统浏览器打开 `https://chatgpt.com/g/<gpt_id>`，不通过内置自动化上下文再次跳转。
-- 浏览器自动化过程中已知的 CDP 事件反序列化噪音日志不应输出到用户终端。
-- 若当前工作区已有 GPT 记录，则执行 GPT 更新流程。
-- GPT 更新流程需要同步刷新名称、指令、模型、Action 架构与 Action Bearer API Key，确保其与当前启动实例保持一致。
+### 2. GPT 同步处理
+- 临时域名模式下，启动后必须按当前工作区执行 GPT 创建或更新流程。
+- 已启用自定义域名时，若当前工作区不存在配置项，或配置项中没有有效 `gpt_id`，启动后也必须执行 GPT 创建流程。
+- 已启用自定义域名且当前工作区已有有效 `gpt_id` 时，默认启动只拉起服务和 tunnel，不自动进入 GPT 编辑流程。
+- 已启用自定义域名且传入 `--reset` 时，必须执行 GPT 创建或更新流程。
+- GPT 创建与更新时，需要同步刷新名称、指令、模型、OpenAPI 架构与 Action Bearer API Key。
+- 当工作区配置不存在或 `gpt_id` 为空时，必须走 GPT 创建逻辑，不得尝试更新。
+- GPT 保存成功后，只持久化 `g-<gpt_id>` 作为工作区 GPT 标识。

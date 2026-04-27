@@ -34,3 +34,49 @@ chatgpt2codex
 2. 首次启动时，按提示登录 ChatGPT 账号。
 3. 程序会自动创建可用的 GPT。
 4. 在 ChatGPT 中打开该 GPT 并直接发起任务。
+
+## 使用自定义域名
+
+你可也可使用自定义域名，通过 Claudeflare 的 Tunnel 接入 ChatGPT.
+相比随机域名，自定义域名可以快速启动 GPT.
+
+
+### 2. 前置条件
+
+1. 域名已接入 Cloudflare。
+2. 已创建名为 `chatgpt2codex` 的 Cloudflare Named Tunnel。
+3. 已拿到可读取 Zone、读取/更新 Tunnel、创建或更新 DNS 路由的 Cloudflare API Token。
+
+### 3. 操作步骤
+
+1. 在项目目录执行交互式配置：
+
+```bash
+chatgpt2codex domain
+```
+
+2. 按提示输入或确认以下配置：
+- 基础域名
+- Cloudflare API Token
+
+3. 配置保存后，在项目根目录直接启动：
+
+```bash
+chatgpt2codex
+```
+
+如需重新同步 GPT 名称、指令、Action 和 Bearer Key，执行：
+
+```bash
+chatgpt2codex --reset
+```
+
+### 4. 移除自定义域名
+
+执行：
+
+```bash
+chatgpt2codex domain -
+```
+
+执行后会将 `cloudflare.enableDomain` 设置为 `false`，保留已保存的 Cloudflare API Token，并改用随机域名。

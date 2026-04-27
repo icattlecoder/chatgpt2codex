@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/icattlecoder/chatgpt2codex/internal/audit"
 	docsasset "github.com/icattlecoder/chatgpt2codex/internal/docsasset"
@@ -38,10 +40,10 @@ func NewHandler(config Config) http.Handler {
 
 	mux := http.NewServeMux()
 	for name, executor := range executors {
-		mux.HandleFunc("POST /tools/"+name, requireAPIKey(config.APIKey, makeToolHandler(config, name, executor)))
+		mux.HandleFunc("POST /tools/"+name, requireAPIKey(config.APIKey, makeToolHandler(config, executor)))
 	}
 	mux.HandleFunc("POST /context/runtime", requireAPIKey(config.APIKey, makeRuntimeContextHandler(config)))
-	return mux
+	return withAuditLogging(config, mux)
 }
 
 func ListenFirstAvailable(startPort int) (net.Listener, error) {
@@ -54,7 +56,7 @@ func ListenFirstAvailable(startPort int) (net.Listener, error) {
 	return nil, fmt.Errorf("no available port found starting at %d", startPort)
 }
 
-func makeToolHandler(config Config, toolName string, executor Executor) http.HandlerFunc {
+func makeToolHandler(config Config, executor Executor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -63,7 +65,6 @@ func makeToolHandler(config Config, toolName string, executor Executor) http.Han
 		}
 
 		workspace, err := resolveRequestWorkspace(config.DefaultWorkspace)
-		conversationID := conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id"))
 
 		statusCode := http.StatusOK
 		var response tool.Response
@@ -88,7 +89,6 @@ func makeToolHandler(config Config, toolName string, executor Executor) http.Han
 		}
 
 		writeJSONResponse(w, statusCode, responseBody)
-		appendAuditLog(config.AuditLogger, conversationID, toolName, workspace, r, body, statusCode, responseBody)
 	}
 }
 
@@ -101,7 +101,6 @@ func makeRuntimeContextHandler(config Config) http.HandlerFunc {
 		}
 
 		workspace, err := resolveRequestWorkspace(config.DefaultWorkspace)
-		conversationID := conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id"))
 
 		statusCode := http.StatusOK
 		responseBody, err := buildRuntimeContextResponseBody(workspace, body, err)
@@ -117,7 +116,6 @@ func makeRuntimeContextHandler(config Config) http.HandlerFunc {
 		}
 
 		writeJSONResponse(w, statusCode, responseBody)
-		appendAuditLog(config.AuditLogger, conversationID, "get_runtime_context", workspace, r, body, statusCode, responseBody)
 	}
 }
 
@@ -186,6 +184,50 @@ func writeJSONResponse(w http.ResponseWriter, statusCode int, body []byte) {
 	_, _ = w.Write(body)
 }
 
+func withAuditLogging(config Config, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		requestBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			responseErr := tool.ValidationError("failed to read request body")
+			responseBody := mustMarshalToolResponse(tool.Response{
+				Content: []tool.ContentItem{{Type: "text", Text: responseErr.Error()}},
+			})
+			statusCode := tool.StatusCode(responseErr)
+			writeJSONResponse(w, statusCode, responseBody)
+			printRequestCallLog(config.DefaultWorkspace, auditToolName(r.URL.Path), r, nil, statusCode, time.Since(startedAt), err)
+			appendAuditLog(
+				config.AuditLogger,
+				conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id")),
+				auditToolName(r.URL.Path),
+				auditWorkspace(config.DefaultWorkspace),
+				r,
+				nil,
+				statusCode,
+				responseBody,
+			)
+			return
+		}
+
+		r.Body = io.NopCloser(bytes.NewReader(requestBody))
+		recorder := newAuditResponseWriter(w)
+		next.ServeHTTP(recorder, r)
+
+		printRequestCallLog(config.DefaultWorkspace, auditToolName(r.URL.Path), r, requestBody, recorder.StatusCode(), time.Since(startedAt), nil)
+
+		appendAuditLog(
+			config.AuditLogger,
+			conversationIDFromHeader(r.Header.Get("Openai-Conversation-Id")),
+			auditToolName(r.URL.Path),
+			auditWorkspace(config.DefaultWorkspace),
+			r,
+			requestBody,
+			recorder.StatusCode(),
+			recorder.Body(),
+		)
+	})
+}
+
 func appendAuditLog(logger *audit.Logger, conversationID, toolName, workspace string, r *http.Request, requestBody []byte, statusCode int, responseBody []byte) {
 	if logger == nil {
 		return
@@ -208,6 +250,37 @@ func appendAuditLog(logger *audit.Logger, conversationID, toolName, workspace st
 	)
 }
 
+func auditToolName(path string) string {
+	switch path {
+	case "/context/runtime":
+		return "get_runtime_context"
+	case "/tools/read":
+		return "read"
+	case "/tools/bash":
+		return "bash"
+	case "/tools/edit":
+		return "edit"
+	case "/tools/write":
+		return "write"
+	case "/tools/grep":
+		return "grep"
+	case "/tools/find":
+		return "find"
+	case "/tools/ls":
+		return "ls"
+	default:
+		return "http_access"
+	}
+}
+
+func auditWorkspace(defaultWorkspace string) string {
+	workspace, _ := resolveRequestWorkspace(defaultWorkspace)
+	if strings.TrimSpace(workspace) != "" {
+		return workspace
+	}
+	return defaultWorkspace
+}
+
 func cloneHeaders(headers http.Header) map[string][]string {
 	cloned := make(map[string][]string, len(headers))
 	for key, values := range headers {
@@ -225,6 +298,57 @@ func parseJSONForLog(body []byte) any {
 		return value
 	}
 	return string(body)
+}
+
+func mustMarshalToolResponse(response tool.Response) []byte {
+	body, err := json.Marshal(response)
+	if err != nil {
+		return []byte(`{"content":[{"type":"text","text":"failed to marshal response"}]}`)
+	}
+	return body
+}
+
+type auditResponseWriter struct {
+	http.ResponseWriter
+	statusCode  int
+	wroteHeader bool
+	body        bytes.Buffer
+}
+
+func newAuditResponseWriter(w http.ResponseWriter) *auditResponseWriter {
+	return &auditResponseWriter{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK,
+	}
+}
+
+func (w *auditResponseWriter) Header() http.Header {
+	return w.ResponseWriter.Header()
+}
+
+func (w *auditResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *auditResponseWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	_, _ = w.body.Write(body)
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *auditResponseWriter) StatusCode() int {
+	return w.statusCode
+}
+
+func (w *auditResponseWriter) Body() []byte {
+	return append([]byte(nil), w.body.Bytes()...)
 }
 
 func conversationIDFromHeader(raw string) string {

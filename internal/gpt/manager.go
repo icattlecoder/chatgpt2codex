@@ -13,7 +13,7 @@ import (
 
 var ErrUpdateNotImplemented = errors.New("gpt update is not implemented")
 
-const DefaultRecommendedModel = "GPT-5.4 Thinking"
+const DefaultRecommendedModel = "GPT-5.5 Thinking"
 
 type Store interface {
 	Load() (config.File, error)
@@ -98,7 +98,9 @@ func (m *Manager) Ensure(ctx context.Context, request CreateRequest) (EnsureResu
 		return EnsureResult{}, err
 	}
 
-	if gptID, ok := cfg.GPTID(workspace); ok {
+	entry, hasWorkspace := cfg.Workspace(workspace)
+	gptID := strings.TrimSpace(entry.GPTID)
+	if hasWorkspace && gptID != "" {
 		updateErr := m.updater.Update(ctx, UpdateRequest{
 			Workspace:        workspace,
 			GPTID:            gptID,

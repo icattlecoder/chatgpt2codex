@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -58,20 +60,26 @@ func TestHandlerUsesConfiguredWorkspaceAndWritesAuditLog(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 log line, got %d", len(lines))
 	}
-	if strings.Contains(string(data), "ctc_secret") {
-		t.Fatalf("expected authorization header to be redacted from audit log, got %q", string(data))
+	if !strings.Contains(string(data), "Bearer ctc_secret") {
+		t.Fatalf("expected authorization header to be logged in plaintext, got %q", string(data))
 	}
-	if !strings.Contains(string(data), "[REDACTED]") {
-		t.Fatalf("expected redacted authorization marker in audit log, got %q", string(data))
+	if strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("did not expect authorization header to be redacted in audit log, got %q", string(data))
 	}
 	var record struct {
 		Workspace string `json:"workspace"`
+		Request   struct {
+			Body map[string]any `json:"body"`
+		} `json:"request"`
 	}
 	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
 		t.Fatalf("invalid log record: %v", err)
 	}
 	if record.Workspace != defaultWorkspace {
 		t.Fatalf("expected workspace %q, got %q", defaultWorkspace, record.Workspace)
+	}
+	if record.Request.Body["path"] != "note.txt" {
+		t.Fatalf("expected request body to be audited, got %#v", record.Request.Body)
 	}
 }
 
@@ -150,6 +158,124 @@ func TestRuntimeContextHandlerReturnsPlainJSONAndWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestRequestLogSummaryUsesToolSpecificFields(t *testing.T) {
+	cases := []struct {
+		name     string
+		toolName string
+		path     string
+		body     string
+		want     []string
+		notWant  []string
+	}{
+		{
+			name:     "read",
+			toolName: "read",
+			path:     "/tools/read",
+			body:     `{"path":"README.md","offset":3,"limit":5}`,
+			want:     []string{`path="README.md"`, "offset=3", "limit=5"},
+		},
+		{
+			name:     "bash",
+			toolName: "bash",
+			path:     "/tools/bash",
+			body:     `{"command":"go test ./...","timeout":30}`,
+			want:     []string{`command="go test ./..."`, "timeout=30"},
+		},
+		{
+			name:     "edit",
+			toolName: "edit",
+			path:     "/tools/edit",
+			body:     `{"path":"main.go","edits":[{"oldText":"secret old","newText":"secret new"},{"oldText":"old 2","newText":"new 2"}]}`,
+			want:     []string{`path="main.go"`, "edits=2"},
+			notWant:  []string{"secret old", "secret new"},
+		},
+		{
+			name:     "write",
+			toolName: "write",
+			path:     "/tools/write",
+			body:     `{"path":"notes.txt","content":"secret file body"}`,
+			want:     []string{`path="notes.txt"`, "bytes=16"},
+			notWant:  []string{"secret file body"},
+		},
+		{
+			name:     "grep",
+			toolName: "grep",
+			path:     "/tools/grep",
+			body:     `{"pattern":"TODO","path":"internal","glob":"*.go","ignoreCase":true,"literal":true,"context":2,"limit":9}`,
+			want:     []string{`pattern="TODO"`, `path="internal"`, `glob="*.go"`, "ignoreCase=true", "literal=true", "context=2", "limit=9"},
+		},
+		{
+			name:     "find",
+			toolName: "find",
+			path:     "/tools/find",
+			body:     `{"pattern":"*.go","path":"internal","limit":7}`,
+			want:     []string{`pattern="*.go"`, `path="internal"`, "limit=7"},
+		},
+		{
+			name:     "ls",
+			toolName: "ls",
+			path:     "/tools/ls",
+			body:     `{"path":"internal","limit":4}`,
+			want:     []string{`path="internal"`, "limit=4"},
+		},
+		{
+			name:     "get_runtime_context",
+			toolName: "get_runtime_context",
+			path:     "/context/runtime",
+			body:     `{"cwd":"internal/server"}`,
+			want:     []string{`cwd="internal/server"`},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(requestLogSummary(tc.toolName, tc.path, []byte(tc.body)), " ")
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("expected %q to contain %q", got, want)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(got, notWant) {
+					t.Fatalf("expected %q not to contain %q", got, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestHandlerPrintsConciseToolRequestLog(t *testing.T) {
+	var logBuffer bytes.Buffer
+	originalOutput := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&logBuffer)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(originalOutput)
+		log.SetFlags(originalFlags)
+	}()
+
+	workspace := t.TempDir()
+	handler := NewHandler(Config{DefaultWorkspace: workspace})
+	request := httptest.NewRequest(http.MethodPost, "/tools/write", strings.NewReader(`{"path":"notes.txt","content":"secret file body"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	got := logBuffer.String()
+	for _, want := range []string{`tool_call`, `tool="write"`, "status=200", `path="notes.txt"`, "bytes=16"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected log %q to contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "secret file body") {
+		t.Fatalf("expected write content to be omitted from request log, got %q", got)
+	}
+}
+
 func TestBuildAPISpecUsesConfiguredPublicURL(t *testing.T) {
 	body := BuildAPISpec("https://demo.trycloudflare.com")
 	if !strings.Contains(body, "https://demo.trycloudflare.com") {
@@ -168,9 +294,16 @@ func TestBuildAPISpecFallsBackToEmbeddedSpecWhenEmpty(t *testing.T) {
 }
 
 func TestHandlerRejectsMissingAPIKey(t *testing.T) {
-	handler := NewHandler(Config{DefaultWorkspace: t.TempDir(), APIKey: "ctc_secret"})
-	request := httptest.NewRequest(http.MethodPost, "/tools/ls", strings.NewReader(`{}`))
+	logDir := t.TempDir()
+	logger, err := audit.NewLogger(logDir)
+	if err != nil {
+		t.Fatalf("NewLogger returned error: %v", err)
+	}
+
+	handler := NewHandler(Config{DefaultWorkspace: t.TempDir(), APIKey: "ctc_secret", AuditLogger: logger})
+	request := httptest.NewRequest(http.MethodPost, "/tools/ls", strings.NewReader(`{"path":"."}`))
 	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Openai-Conversation-Id", "conv-unauthorized")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
@@ -182,6 +315,103 @@ func TestHandlerRejectsMissingAPIKey(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "missing or invalid bearer api key") {
 		t.Fatalf("expected unauthorized body, got %q", recorder.Body.String())
+	}
+
+	logPath := filepath.Join(logDir, time.Now().Format("2006"), time.Now().Format("01"), time.Now().Format("02"), "conv-unauthorized.jsonl")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(lines))
+	}
+	var record struct {
+		Tool    string `json:"tool"`
+		Request struct {
+			Body map[string]any `json:"body"`
+		} `json:"request"`
+		Response struct {
+			Status int `json:"status"`
+			Body   struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"body"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("invalid log record: %v", err)
+	}
+	if record.Tool != "ls" {
+		t.Fatalf("expected tool ls, got %q", record.Tool)
+	}
+	if record.Response.Status != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, record.Response.Status)
+	}
+	if record.Request.Body["path"] != "." {
+		t.Fatalf("expected audited request body, got %#v", record.Request.Body)
+	}
+	if len(record.Response.Body.Content) == 0 || !strings.Contains(record.Response.Body.Content[0].Text, "invalid bearer") {
+		t.Fatalf("expected audited unauthorized response body, got %#v", record.Response.Body)
+	}
+}
+
+func TestHandlerAuditsNotFoundRequests(t *testing.T) {
+	logDir := t.TempDir()
+	logger, err := audit.NewLogger(logDir)
+	if err != nil {
+		t.Fatalf("NewLogger returned error: %v", err)
+	}
+
+	handler := NewHandler(Config{DefaultWorkspace: t.TempDir(), APIKey: "ctc_secret", AuditLogger: logger})
+	request := httptest.NewRequest(http.MethodPost, "/missing", strings.NewReader(`{"foo":"bar"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Openai-Conversation-Id", "conv-404")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, recorder.Code)
+	}
+
+	logPath := filepath.Join(logDir, time.Now().Format("2006"), time.Now().Format("01"), time.Now().Format("02"), "conv-404.jsonl")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(lines))
+	}
+	var record struct {
+		Tool    string `json:"tool"`
+		Request struct {
+			Path string         `json:"path"`
+			Body map[string]any `json:"body"`
+		} `json:"request"`
+		Response struct {
+			Status int    `json:"status"`
+			Body   string `json:"body"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("invalid log record: %v", err)
+	}
+	if record.Tool != "http_access" {
+		t.Fatalf("expected tool http_access, got %q", record.Tool)
+	}
+	if record.Request.Path != "/missing" {
+		t.Fatalf("expected path /missing, got %q", record.Request.Path)
+	}
+	if record.Request.Body["foo"] != "bar" {
+		t.Fatalf("expected request body to be audited, got %#v", record.Request.Body)
+	}
+	if record.Response.Status != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, record.Response.Status)
+	}
+	if !strings.Contains(record.Response.Body, "404 page not found") {
+		t.Fatalf("expected 404 body to be audited, got %q", record.Response.Body)
 	}
 }
 

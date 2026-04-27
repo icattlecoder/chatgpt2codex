@@ -59,12 +59,5 @@ func validBearerAuthorization(rawHeader, expectedAPIKey string) bool {
 func sanitizeHeaderValues(key string, values []string) []string {
 	copied := make([]string, len(values))
 	copy(copied, values)
-	if strings.EqualFold(strings.TrimSpace(key), "Authorization") {
-		for index := range copied {
-			if strings.TrimSpace(copied[index]) != "" {
-				copied[index] = "[REDACTED]"
-			}
-		}
-	}
 	return copied
 }

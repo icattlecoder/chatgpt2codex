@@ -78,6 +78,36 @@ func TestEnsureCreatesGPTAndPersistsMapping(t *testing.T) {
 	}
 }
 
+func TestEnsureCreatesGPTWhenWorkspaceEntryHasNoGPTID(t *testing.T) {
+	store := &stubStore{cfg: config.File{
+		GPTs: map[string]config.GPTConfig{
+			"/tmp/workspace": {Host: "demo.example.com", APIKey: "ctc_saved_key"},
+		},
+	}}
+	creator := &stubCreator{result: CreateResult{GPTID: "g-123"}}
+	updater := &stubUpdater{}
+	manager := NewManager(store, creator, updater)
+
+	result, err := manager.Ensure(context.Background(), CreateRequest{
+		Workspace: "/tmp/workspace",
+	})
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected Created to be true")
+	}
+	if !creator.called {
+		t.Fatalf("expected creator to be called")
+	}
+	if updater.called {
+		t.Fatalf("did not expect updater to be called")
+	}
+	if savedID, ok := store.saved.GPTID("/tmp/workspace"); !ok || savedID != "g-123" {
+		t.Fatalf("expected saved mapping g-123, got %#v", store.saved.GPTs)
+	}
+}
+
 func TestEnsureSkipsCreateWhenUpdateNotImplemented(t *testing.T) {
 	cfg := config.File{}
 	cfg.SetGPTID("/tmp/workspace", "g-existing")
